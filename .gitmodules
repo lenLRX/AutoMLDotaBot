@@ -8,3 +8,7 @@
 	path = thirdparty/json
 	url = https://github.com/nlohmann/json.git
 	branch = master
+[submodule "thirdparty/protobuf"]
+	path = thirdparty/protobuf
+	url = https://github.com/protocolbuffers/protobuf.git
+	branch = 3.8.x
