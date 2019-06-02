@@ -5,6 +5,8 @@ include(ExternalProject)
 
 set(CMAKE_CXX_STANDARD 14)
 
+set(THIRDPARTY_PATH ${CMAKE_SOURCE_DIR}/thirdparty)
+
 #from paddlepaddle
 FUNCTION(build_protobuf TARGET_NAME BUILD_FOR_HOST)
     set(THIRD_PARTY_PATH ${CMAKE_SOURCE_DIR}/thirdparty)
@@ -90,18 +92,28 @@ set(PROTOBUF_PROTOC_EXECUTABLE ${extern_protobuf_PROTOC_EXECUTABLE}
         CACHE FILEPATH "protoc compiler." FORCE)
 
 
-set(DOTASERVICE_PROTO_PATH ${CMAKE_SOURCE_DIR}/thirdparty/dotaservice/botcpp/)
+set(DOTASERVICE_PROTO_PATH ${CMAKE_SOURCE_DIR}/thirdparty/dotaservice)
 
-set(DOTA_PROTO_SRCS ${CMAKE_SOURCE_DIR}/src/protobuf/dota_gcmessages_common_bot_script.pb.cc)
-set(DOTA_PROTO_HDRS ${CMAKE_SOURCE_DIR}/src/protobuf/dota_gcmessages_common_bot_script.pb.h)
+set(PROTOS
+        dota_gcmessages_common_bot_script.proto
+        dota_shared_enums.proto
+        DotaService.proto)
 
-add_custom_command(
-        OUTPUT ${DOTA_PROTO_SRCS}
-        COMMAND  ${PROTOBUF_PROTOC_EXECUTABLE} --cpp_out ${CMAKE_SOURCE_DIR}/src/protobuf -I ${DOTASERVICE_PROTO_PATH}  dota_gcmessages_common_bot_script.proto
-        DEPENDS ${DOTASERVICE_PROTO} ${PROTOBUF_PROTOC_EXECUTABLE}
-        COMMENT "Running cpp protocol buffer compiler"
-        VERBATIM )
+foreach(FIL ${PROTOS})
+    STRING(REPLACE ".proto" ".pb.cc" SRC_NAME "${FIL}")
+    STRING(REPLACE ".proto" ".pb.h" HDR_NAME "${FIL}")
 
+    set(OUTPUT_SRC ${CMAKE_SOURCE_DIR}/src/protobuf/dotaservice/protos/${SRC_NAME})
+    set(OUTPUT_HDR ${CMAKE_SOURCE_DIR}/src/protobuf/dotaservice/protos/${HDR_NAME})
+    list(APPEND DOTA_PROTO_SRCS ${OUTPUT_SRC})
+    list(APPEND DOTA_PROTO_HDRS ${OUTPUT_HDR})
+    add_custom_command(
+            OUTPUT ${CMAKE_SOURCE_DIR}/src/protobuf${SRC_NAME} ${CMAKE_SOURCE_DIR}/src/protobuf${HDR_NAME}
+            COMMAND  ${PROTOBUF_PROTOC_EXECUTABLE} --cpp_out ${CMAKE_SOURCE_DIR}/src/protobuf -I ${DOTASERVICE_PROTO_PATH}  ${CMAKE_SOURCE_DIR}/thirdparty/dotaservice/dotaservice/protos/${FIL}
+            DEPENDS ${DOTASERVICE_PROTO} ${PROTOBUF_PROTOC_EXECUTABLE}
+            COMMENT "Running cpp protocol buffer compiler"
+            VERBATIM )
+endforeach()
 
 set_source_files_properties(
         ${DOTA_PROTO_SRCS}
@@ -109,8 +121,69 @@ set_source_files_properties(
         PROPERTIES GENERATED TRUE
 )
 
-include_directories(${PROTOBUF_INCLUDE_DIR})
+set(JSON_BuildTests OFF CACHE INTERNAL "")
 
+add_subdirectory(${CMAKE_SOURCE_DIR}/thirdparty/json)
+
+include_directories(${PROTOBUF_INCLUDE_DIR})
+include_directories(${CMAKE_SOURCE_DIR}/src/protobuf/)
+include_directories(${CMAKE_SOURCE_DIR}/thirdparty/json/include)
 
 add_executable(AutoMLDotaBot main.cpp ${DOTA_PROTO_SRCS} ${DOTA_PROTO_HDRS})
-target_link_libraries(AutoMLDotaBot ${PROTOBUF_LIBRARY})
+target_link_libraries(AutoMLDotaBot ${PROTOBUF_LIBRARY} nlohmann_json::nlohmann_json)
+
+set(THIRDPARTY_INSTALL ${THIRDPARTY_PATH}/install/)
+
+ExternalProject_Add(c-ares
+        PREFIX c-ares
+        SOURCE_DIR "${THIRDPARTY_PATH}/c-ares"
+        DOWNLOAD_COMMAND  ""
+        CMAKE_CACHE_ARGS
+        -DCARES_SHARED:BOOL=OFF
+        -DCARES_STATIC:BOOL=ON
+        -DCARES_STATIC_PIC:BOOL=ON
+        -DCMAKE_INSTALL_PREFIX:PATH=${THIRDPARTY_INSTALL}/c-ares
+        )
+
+# Builds zlib project from the git submodule.
+ExternalProject_Add(zlib
+        PREFIX zlib
+        SOURCE_DIR "${THIRDPARTY_PATH}/zlib"
+        DOWNLOAD_COMMAND  ""
+        CMAKE_CACHE_ARGS
+        -DCMAKE_INSTALL_PREFIX:PATH=${THIRDPARTY_INSTALL}/zlib
+        )
+
+# the location where protobuf-config.cmake will be installed varies by platform
+set(_FINDPACKAGE_PROTOBUF_CONFIG_DIR "${THIRDPARTY_INSTALL}/protobuf/lib/cmake/protobuf")
+
+set(_CMAKE_ARGS_OPENSSL_ROOT_DIR "")
+
+# Builds gRPC based on locally checked-out sources and set arguments so that all the dependencies
+# are correctly located.
+ExternalProject_Add(grpc
+        PREFIX grpc
+        SOURCE_DIR "${THIRDPARTY_PATH}/grpc"
+        DOWNLOAD_COMMAND  ""
+        CMAKE_CACHE_ARGS
+        -DgRPC_INSTALL:BOOL=ON
+        -DgRPC_BUILD_TESTS:BOOL=OFF
+        -DgRPC_PROTOBUF_PROVIDER:STRING=package
+        -DgRPC_PROTOBUF_PACKAGE_TYPE:STRING=CONFIG
+        -DProtobuf_DIR:PATH=${_FINDPACKAGE_PROTOBUF_CONFIG_DIR}
+        -DgRPC_ZLIB_PROVIDER:STRING=package
+        -DZLIB_ROOT:STRING=${THIRDPARTY_INSTALL}/zlib
+        -DgRPC_CARES_PROVIDER:STRING=package
+        -Dc-ares_DIR:PATH=${THIRDPARTY_INSTALL}/c-ares/lib/cmake/c-ares
+        -DgRPC_SSL_PROVIDER:STRING=module
+        -DBORINGSSL_ROOT_DIR:PATH=${THIRDPARTY_PATH}/boringssl
+        ${_CMAKE_ARGS_OPENSSL_ROOT_DIR}
+        -DCMAKE_INSTALL_PREFIX:PATH=${THIRDPARTY_INSTALL}/grpc
+        DEPENDS c-ares extern_protobuf zlib
+        )
+
+
+add_executable(grpc_test "grpc_test.cpp" )
+target_link_libraries(grpc_test
+        ${_GRPC_GRPCPP_UNSECURE}
+        ${_PROTOBUF_LIBPROTOBUF})
