@@ -3,6 +3,8 @@ project(AutoMLDotaBot)
 
 include(ExternalProject)
 
+find_package(Torch REQUIRED)
+
 set(CMAKE_CXX_STANDARD 14)
 
 set(THIRDPARTY_PATH ${CMAKE_SOURCE_DIR}/thirdparty)
@@ -94,43 +96,15 @@ set(PROTOBUF_PROTOC_EXECUTABLE ${extern_protobuf_PROTOC_EXECUTABLE}
 
 set(DOTASERVICE_PROTO_PATH ${CMAKE_SOURCE_DIR}/thirdparty/dotaservice)
 
-set(PROTOS
-        dota_gcmessages_common_bot_script.proto
-        dota_shared_enums.proto
-        DotaService.proto)
-
-foreach(FIL ${PROTOS})
-    STRING(REPLACE ".proto" ".pb.cc" SRC_NAME "${FIL}")
-    STRING(REPLACE ".proto" ".pb.h" HDR_NAME "${FIL}")
-
-    set(OUTPUT_SRC ${CMAKE_SOURCE_DIR}/src/protobuf/dotaservice/protos/${SRC_NAME})
-    set(OUTPUT_HDR ${CMAKE_SOURCE_DIR}/src/protobuf/dotaservice/protos/${HDR_NAME})
-    list(APPEND DOTA_PROTO_SRCS ${OUTPUT_SRC})
-    list(APPEND DOTA_PROTO_HDRS ${OUTPUT_HDR})
-    add_custom_command(
-            OUTPUT ${CMAKE_SOURCE_DIR}/src/protobuf${SRC_NAME} ${CMAKE_SOURCE_DIR}/src/protobuf${HDR_NAME}
-            COMMAND  ${PROTOBUF_PROTOC_EXECUTABLE} --cpp_out ${CMAKE_SOURCE_DIR}/src/protobuf -I ${DOTASERVICE_PROTO_PATH}  ${CMAKE_SOURCE_DIR}/thirdparty/dotaservice/dotaservice/protos/${FIL}
-            DEPENDS ${DOTASERVICE_PROTO} ${PROTOBUF_PROTOC_EXECUTABLE}
-            COMMENT "Running cpp protocol buffer compiler"
-            VERBATIM )
-endforeach()
-
-set_source_files_properties(
-        ${DOTA_PROTO_SRCS}
-        ${DOTA_PROTO_HDRS}
-        PROPERTIES GENERATED TRUE
-)
-
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/thirdparty/json)
 
+include_directories(${TORCH_INCLUDE_DIRS})
 include_directories(${PROTOBUF_INCLUDE_DIR})
+include_directories(${CMAKE_SOURCE_DIR}/include)
 include_directories(${CMAKE_SOURCE_DIR}/src/protobuf/)
 include_directories(${CMAKE_SOURCE_DIR}/thirdparty/json/include)
-
-add_executable(AutoMLDotaBot main.cpp ${DOTA_PROTO_SRCS} ${DOTA_PROTO_HDRS})
-target_link_libraries(AutoMLDotaBot ${PROTOBUF_LIBRARY} nlohmann_json::nlohmann_json)
 
 set(THIRDPARTY_INSTALL ${THIRDPARTY_PATH}/install/)
 
@@ -161,7 +135,10 @@ set(_CMAKE_ARGS_OPENSSL_ROOT_DIR "")
 
 # Builds gRPC based on locally checked-out sources and set arguments so that all the dependencies
 # are correctly located.
-ExternalProject_Add(grpc
+
+set(grpc_name extern_grpc)
+
+ExternalProject_Add(${grpc_name}
         PREFIX grpc
         SOURCE_DIR "${THIRDPARTY_PATH}/grpc"
         DOWNLOAD_COMMAND  ""
@@ -182,8 +159,84 @@ ExternalProject_Add(grpc
         DEPENDS c-ares extern_protobuf zlib
         )
 
+include_directories(${THIRDPARTY_INSTALL}/grpc/include)
 
-add_executable(grpc_test "grpc_test.cpp" )
+set(PROTOS
+        dota_gcmessages_common_bot_script.proto
+        dota_shared_enums.proto
+        DotaService.proto)
+
+set(_GRPC_CPP_PLUGIN_EXECUTABLE ${CMAKE_CURRENT_BINARY_DIR}/grpc/src/${grpc_name}-build/grpc_cpp_plugin)
+set(_GRPC_GRPCPP_LIBRARY
+        grpc++
+        grpc++_cronet
+        grpc++_error_details
+        grpc++_reflection
+        grpc++_unsecure
+        grpcpp_channelz
+        grpc
+        gpr
+        address_sorting)
+
+foreach(FIL ${PROTOS})
+    STRING(REPLACE ".proto" ".pb.cc" SRC_NAME "${FIL}")
+    STRING(REPLACE ".proto" ".pb.h" HDR_NAME "${FIL}")
+    STRING(REPLACE ".proto" ".grpc.pb.cc" GRPC_SRC_NAME "${FIL}")
+    STRING(REPLACE ".proto" ".grpc.pb.h" GRPC_HDR_NAME "${FIL}")
+
+    set(OUTPUT_SRC ${CMAKE_SOURCE_DIR}/src/protobuf/dotaservice/protos/${SRC_NAME})
+    set(OUTPUT_HDR ${CMAKE_SOURCE_DIR}/src/protobuf/dotaservice/protos/${HDR_NAME})
+    set(OUTPUT_GRPC_SRC ${CMAKE_SOURCE_DIR}/src/protobuf/dotaservice/protos/${GRPC_SRC_NAME})
+    set(OUTPUT_GRPC_HDR ${CMAKE_SOURCE_DIR}/src/protobuf/dotaservice/protos/${GRPC_HDR_NAME})
+
+    list(APPEND DOTA_PROTO_SRCS ${OUTPUT_SRC})
+    list(APPEND DOTA_PROTO_HDRS ${OUTPUT_HDR})
+    list(APPEND DOTA_PROTO_SRCS ${OUTPUT_GRPC_SRC})
+    list(APPEND DOTA_PROTO_HDRS ${OUTPUT_GRPC_HDR})
+
+    add_custom_command(
+            OUTPUT ${OUTPUT_SRC} ${OUTPUT_HDR}
+            COMMAND  ${PROTOBUF_PROTOC_EXECUTABLE}
+            --plugin="protoc-gen-grpc=${_GRPC_CPP_PLUGIN_EXECUTABLE}"
+            --cpp_out ${CMAKE_SOURCE_DIR}/src/protobuf
+            --grpc_out ${CMAKE_SOURCE_DIR}/src/protobuf
+            -I ${DOTASERVICE_PROTO_PATH}
+
+            ${CMAKE_SOURCE_DIR}/thirdparty/dotaservice/dotaservice/protos/${FIL}
+
+            DEPENDS ${DOTASERVICE_PROTO} ${PROTOBUF_PROTOC_EXECUTABLE} ${grpc_name}
+            COMMENT "${PROTOBUF_PROTOC_EXECUTABLE}
+            --plugin=protoc-gen-grpc=${_GRPC_CPP_PLUGIN_EXECUTABLE}
+            --cpp_out ${CMAKE_SOURCE_DIR}/src/protobuf
+            --grpc_out ${CMAKE_SOURCE_DIR}/src/protobuf
+            -I ${DOTASERVICE_PROTO_PATH}
+
+            ${CMAKE_SOURCE_DIR}/thirdparty/dotaservice/dotaservice/protos/${FIL}"
+            )
+
+endforeach()
+
+set_source_files_properties(
+        ${DOTA_PROTO_SRCS}
+        ${DOTA_PROTO_HDRS}
+        PROPERTIES GENERATED TRUE
+)
+
+
+add_executable(AutoMLDotaBot main.cpp include/dotaclient/dotaservice.h include/dotaclient/env.h include/dotaclient/util.h src/dotaclient/env.cpp include/nn/nn.h include/nn/util.h include/nn/layer.h src/nn/layer.cpp include/nn/torch_layer.h)
+target_link_libraries(AutoMLDotaBot nlohmann_json::nlohmann_json)
+
+message(grpc::grpc++_unsecure)
+
+link_directories(${CMAKE_CURRENT_BINARY_DIR}/grpc/src/${grpc_name}-build/)
+link_directories(${THIRDPARTY_INSTALL}/protobuf/lib)
+link_directories(${THIRDPARTY_INSTALL}/zlib/lib)
+link_directories(${THIRDPARTY_INSTALL}/c-ares/lib)
+
+add_executable(grpc_test "grpc_test.cpp" ${DOTA_PROTO_SRCS} ${DOTA_PROTO_HDRS})
 target_link_libraries(grpc_test
-        ${_GRPC_GRPCPP_UNSECURE}
-        ${_PROTOBUF_LIBPROTOBUF})
+        ${_GRPC_GRPCPP_LIBRARY}
+        protobuf
+        pthread
+        z
+        cares)
