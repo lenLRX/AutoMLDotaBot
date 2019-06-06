@@ -12,9 +12,6 @@
 	path = thirdparty/protobuf
 	url = https://github.com/protocolbuffers/protobuf.git
 	branch = 3.8.x
-[submodule "thirdparty/grpc"]
-	path = thirdparty/grpc
-	url = https://github.com/grpc/grpc.git
 [submodule "thirdparty/c-ares"]
 	path = thirdparty/c-ares
 	url = https://github.com/c-ares/c-ares.git
