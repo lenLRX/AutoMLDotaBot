@@ -18,3 +18,6 @@
 [submodule "thirdparty/boringssl"]
 	path = thirdparty/boringssl
 	url = https://github.com/google/boringssl.git
+[submodule "thirdparty/grpc"]
+	path = thirdparty/grpc
+	url = https://github.com/lenLRX/grpc.git
