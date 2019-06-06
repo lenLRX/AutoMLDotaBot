@@ -18,9 +18,6 @@
 [submodule "thirdparty/c-ares"]
 	path = thirdparty/c-ares
 	url = https://github.com/c-ares/c-ares.git
-[submodule "thirdparty/zlib"]
-	path = thirdparty/zlib
-	url = https://github.com/lenLRX/zlib.git
 [submodule "thirdparty/boringssl"]
 	path = thirdparty/boringssl
 	url = https://github.com/google/boringssl.git
