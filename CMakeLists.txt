@@ -3,11 +3,15 @@ project(AutoMLDotaBot)
 
 include(ExternalProject)
 
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+set(THIRDPARTY_PATH ${CMAKE_SOURCE_DIR}/thirdparty)
+
+
 find_package(Torch REQUIRED)
 
 set(CMAKE_CXX_STANDARD 14)
 
-set(THIRDPARTY_PATH ${CMAKE_SOURCE_DIR}/thirdparty)
 
 #from paddlepaddle
 FUNCTION(build_protobuf TARGET_NAME BUILD_FOR_HOST)
@@ -99,73 +103,34 @@ set(DOTASERVICE_PROTO_PATH ${CMAKE_SOURCE_DIR}/thirdparty/dotaservice)
 
 set(THIRDPARTY_INCLUDE_DIRS ${CMAKE_SOURCE_DIR}/thirdparty/include)
 
-include_directories(${TORCH_INCLUDE_DIRS})
 include_directories(${PROTOBUF_INCLUDE_DIR})
+# must include protobuf first ....
+include_directories(${TORCH_INCLUDE_DIRS})
 include_directories(${CMAKE_SOURCE_DIR}/include)
 include_directories(${CMAKE_SOURCE_DIR}/src/protobuf/)
 include_directories(${THIRDPARTY_INCLUDE_DIRS})
 
 set(THIRDPARTY_INSTALL ${THIRDPARTY_PATH}/install/)
 
-ExternalProject_Add(c-ares
-        PREFIX c-ares
-        SOURCE_DIR "${THIRDPARTY_PATH}/c-ares"
-        DOWNLOAD_COMMAND  ""
-        CMAKE_CACHE_ARGS
-        -DCARES_SHARED:BOOL=OFF
-        -DCARES_STATIC:BOOL=ON
-        -DCARES_STATIC_PIC:BOOL=ON
-        -DCMAKE_INSTALL_PREFIX:PATH=${THIRDPARTY_INSTALL}/c-ares
-        )
-
 # the location where protobuf-config.cmake will be installed varies by platform
 set(_FINDPACKAGE_PROTOBUF_CONFIG_DIR "${THIRDPARTY_INSTALL}/protobuf/lib/cmake/protobuf")
 
-set(_CMAKE_ARGS_OPENSSL_ROOT_DIR "")
+set(THIRD_PARTY_PATH ${THIRDPARTY_PATH})
 
-# Builds gRPC based on locally checked-out sources and set arguments so that all the dependencies
-# are correctly located.
+include(grpc)
 
-set(grpc_name extern_grpc)
-
-ExternalProject_Add(${grpc_name}
-        PREFIX grpc
-        SOURCE_DIR "${THIRDPARTY_PATH}/grpc"
-        DOWNLOAD_COMMAND  ""
-        CMAKE_CACHE_ARGS
-        -DgRPC_INSTALL:BOOL=ON
-        -DgRPC_BUILD_TESTS:BOOL=OFF
-        -DgRPC_PROTOBUF_PROVIDER:STRING=package
-        -DgRPC_PROTOBUF_PACKAGE_TYPE:STRING=CONFIG
-        -DProtobuf_DIR:PATH=${_FINDPACKAGE_PROTOBUF_CONFIG_DIR}
-        -DgRPC_ZLIB_PROVIDER:STRING=package
-        -DgRPC_CARES_PROVIDER:STRING=package
-        -Dc-ares_DIR:PATH=${THIRDPARTY_INSTALL}/c-ares/lib/cmake/c-ares
-        -DgRPC_SSL_PROVIDER:STRING=module
-        -DBORINGSSL_ROOT_DIR:PATH=${THIRDPARTY_PATH}/boringssl
-        ${_CMAKE_ARGS_OPENSSL_ROOT_DIR}
-        -DCMAKE_INSTALL_PREFIX:PATH=${THIRDPARTY_INSTALL}/grpc
-        DEPENDS c-ares extern_protobuf
-        )
-
-include_directories(${THIRDPARTY_INSTALL}/grpc/include)
 
 set(PROTOS
         dota_gcmessages_common_bot_script.proto
         dota_shared_enums.proto
         DotaService.proto)
 
-set(_GRPC_CPP_PLUGIN_EXECUTABLE ${CMAKE_CURRENT_BINARY_DIR}/grpc/src/${grpc_name}-build/grpc_cpp_plugin)
 set(_GRPC_GRPCPP_LIBRARY
-        grpc++
-        grpc++_cronet
-        grpc++_error_details
-        grpc++_reflection
-        grpc++_unsecure
-        grpcpp_channelz
-        grpc
-        gpr
-        address_sorting)
+        libgrpc++.a
+        libgrpc++_unsecure.a
+        libgrpc.a
+        libgpr.a
+        )
 
 foreach(FIL ${PROTOS})
     STRING(REPLACE ".proto" ".pb.cc" SRC_NAME "${FIL}")
@@ -186,14 +151,14 @@ foreach(FIL ${PROTOS})
     add_custom_command(
             OUTPUT ${OUTPUT_SRC} ${OUTPUT_HDR}
             COMMAND  ${PROTOBUF_PROTOC_EXECUTABLE}
-            --plugin="protoc-gen-grpc=${_GRPC_CPP_PLUGIN_EXECUTABLE}"
+            --plugin="protoc-gen-grpc=${GRPC_CPP_PLUGIN}"
             --cpp_out ${CMAKE_SOURCE_DIR}/src/protobuf
             --grpc_out ${CMAKE_SOURCE_DIR}/src/protobuf
             -I ${DOTASERVICE_PROTO_PATH}
 
             ${CMAKE_SOURCE_DIR}/thirdparty/dotaservice/dotaservice/protos/${FIL}
 
-            DEPENDS ${DOTASERVICE_PROTO} ${PROTOBUF_PROTOC_EXECUTABLE} ${grpc_name}
+            DEPENDS ${DOTASERVICE_PROTO} ${PROTOBUF_PROTOC_EXECUTABLE} extern_grpc
             COMMENT "${PROTOBUF_PROTOC_EXECUTABLE}
             --plugin=protoc-gen-grpc=${_GRPC_CPP_PLUGIN_EXECUTABLE}
             --cpp_out ${CMAKE_SOURCE_DIR}/src/protobuf
@@ -211,18 +176,13 @@ set_source_files_properties(
         PROPERTIES GENERATED TRUE
 )
 
-
-add_executable(AutoMLDotaBot main.cpp include/dotaclient/dotaservice.h include/dotaclient/env.h include/dotaclient/util.h src/dotaclient/env.cpp include/nn/nn.h include/nn/util.h include/nn/layer.h src/nn/layer.cpp include/nn/torch_layer.h)
-
-link_directories(${CMAKE_CURRENT_BINARY_DIR}/grpc/src/${grpc_name}-build/)
 link_directories(${THIRDPARTY_INSTALL}/protobuf/lib)
-link_directories(${THIRDPARTY_INSTALL}/zlib/lib)
-link_directories(${THIRDPARTY_INSTALL}/c-ares/lib)
+link_directories(${GRPC_INSTALL_DIR}/lib)
+
 
 add_executable(grpc_test "grpc_test.cpp" ${DOTA_PROTO_SRCS} ${DOTA_PROTO_HDRS})
 target_link_libraries(grpc_test
         ${_GRPC_GRPCPP_LIBRARY}
         protobuf
         pthread
-        z
-        cares)
+        z)
