@@ -96,15 +96,14 @@ set(PROTOBUF_PROTOC_EXECUTABLE ${extern_protobuf_PROTOC_EXECUTABLE}
 
 set(DOTASERVICE_PROTO_PATH ${CMAKE_SOURCE_DIR}/thirdparty/dotaservice)
 
-set(JSON_BuildTests OFF CACHE INTERNAL "")
 
-add_subdirectory(${CMAKE_SOURCE_DIR}/thirdparty/json)
+set(THIRDPARTY_INCLUDE_DIRS ${CMAKE_SOURCE_DIR}/thirdparty/include)
 
 include_directories(${TORCH_INCLUDE_DIRS})
 include_directories(${PROTOBUF_INCLUDE_DIR})
 include_directories(${CMAKE_SOURCE_DIR}/include)
 include_directories(${CMAKE_SOURCE_DIR}/src/protobuf/)
-include_directories(${CMAKE_SOURCE_DIR}/thirdparty/json/include)
+include_directories(${THIRDPARTY_INCLUDE_DIRS})
 
 set(THIRDPARTY_INSTALL ${THIRDPARTY_PATH}/install/)
 
@@ -117,15 +116,6 @@ ExternalProject_Add(c-ares
         -DCARES_STATIC:BOOL=ON
         -DCARES_STATIC_PIC:BOOL=ON
         -DCMAKE_INSTALL_PREFIX:PATH=${THIRDPARTY_INSTALL}/c-ares
-        )
-
-# Builds zlib project from the git submodule.
-ExternalProject_Add(zlib
-        PREFIX zlib
-        SOURCE_DIR "${THIRDPARTY_PATH}/zlib"
-        DOWNLOAD_COMMAND  ""
-        CMAKE_CACHE_ARGS
-        -DCMAKE_INSTALL_PREFIX:PATH=${THIRDPARTY_INSTALL}/zlib
         )
 
 # the location where protobuf-config.cmake will be installed varies by platform
@@ -149,14 +139,13 @@ ExternalProject_Add(${grpc_name}
         -DgRPC_PROTOBUF_PACKAGE_TYPE:STRING=CONFIG
         -DProtobuf_DIR:PATH=${_FINDPACKAGE_PROTOBUF_CONFIG_DIR}
         -DgRPC_ZLIB_PROVIDER:STRING=package
-        -DZLIB_ROOT:STRING=${THIRDPARTY_INSTALL}/zlib
         -DgRPC_CARES_PROVIDER:STRING=package
         -Dc-ares_DIR:PATH=${THIRDPARTY_INSTALL}/c-ares/lib/cmake/c-ares
         -DgRPC_SSL_PROVIDER:STRING=module
         -DBORINGSSL_ROOT_DIR:PATH=${THIRDPARTY_PATH}/boringssl
         ${_CMAKE_ARGS_OPENSSL_ROOT_DIR}
         -DCMAKE_INSTALL_PREFIX:PATH=${THIRDPARTY_INSTALL}/grpc
-        DEPENDS c-ares extern_protobuf zlib
+        DEPENDS c-ares extern_protobuf
         )
 
 include_directories(${THIRDPARTY_INSTALL}/grpc/include)
@@ -224,9 +213,6 @@ set_source_files_properties(
 
 
 add_executable(AutoMLDotaBot main.cpp include/dotaclient/dotaservice.h include/dotaclient/env.h include/dotaclient/util.h src/dotaclient/env.cpp include/nn/nn.h include/nn/util.h include/nn/layer.h src/nn/layer.cpp include/nn/torch_layer.h)
-target_link_libraries(AutoMLDotaBot nlohmann_json::nlohmann_json)
-
-message(grpc::grpc++_unsecure)
 
 link_directories(${CMAKE_CURRENT_BINARY_DIR}/grpc/src/${grpc_name}-build/)
 link_directories(${THIRDPARTY_INSTALL}/protobuf/lib)

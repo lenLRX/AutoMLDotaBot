@@ -5,12 +5,6 @@
 	path = thirdparty/protobuf
 	url = https://github.com/protocolbuffers/protobuf.git
 	branch = 3.8.x
-[submodule "thirdparty/c-ares"]
-	path = thirdparty/c-ares
-	url = https://github.com/c-ares/c-ares.git
 [submodule "thirdparty/boringssl"]
 	path = thirdparty/boringssl
 	url = https://github.com/google/boringssl.git
-[submodule "thirdparty/grpc"]
-	path = thirdparty/grpc
-	url = https://github.com/lenLRX/grpc.git
