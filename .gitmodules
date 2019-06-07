@@ -1,13 +1,6 @@
 [submodule "thirdparty/dotaservice"]
 	path = thirdparty/dotaservice
 	url = https://github.com/lenLRX/dotaservice.git
-[submodule "thirdparty/spdlog"]
-	path = thirdparty/spdlog
-	url = https://github.com/lenLRX/spdlog.git
-[submodule "thirdparty/json"]
-	path = thirdparty/json
-	url = https://github.com/nlohmann/json.git
-	branch = master
 [submodule "thirdparty/protobuf"]
 	path = thirdparty/protobuf
 	url = https://github.com/protocolbuffers/protobuf.git
