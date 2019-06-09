@@ -186,3 +186,16 @@ target_link_libraries(grpc_test
         protobuf
         pthread
         z)
+
+file(GLOB_RECURSE BOT_SOURCES RELATIVE ${CMAKE_SOURCE_DIR} "src/*.cc")
+file(GLOB_RECURSE INTERNAL_HEADERS RELATIVE ${CMAKE_SOURCE_DIR} "src/*.h")
+file(GLOB_RECURSE GLOBAL_HEADERS RELATIVE ${CMAKE_SOURCE_DIR} "include/*.h")
+
+add_executable(solo_bot ${BOT_SOURCES} ${INTERNAL_HEADERS} ${GLOBAL_HEADERS})
+target_link_libraries(solo_bot
+        ${_GRPC_GRPCPP_LIBRARY}
+        ${TORCH_CUDA_LIBRARIES}
+        ${TORCH_LIBRARIES}
+        protobuf
+        pthread
+        z)

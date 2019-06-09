@@ -11,12 +11,13 @@ NS_NN_BEGIN
 
 
 
-class Layer {
+class Layer: std::enable_shared_from_this<Layer> {
 public:
 
     using PackedData = std::map<std::string, torch::Tensor>;
     using NetWork = std::shared_ptr<torch::nn::Module>;
     using NetWorks = std::map<std::string, NetWork>;
+    using Ptr = std::shared_ptr<Layer>;
 
     virtual const std::string& get_type() = 0;
 
@@ -27,8 +28,8 @@ public:
     virtual void forward(CMsgBotWorldState state) = 0;
     virtual CMsgBotWorldState_Action get_action();
 
-    virtual PackedData get_trainng_data();
-    virtual void train(PackedData& data);
+    virtual PackedData get_trainng_data() = 0;
+    virtual void train(PackedData& data) = 0;
 
     NetWorks networks;
     std::string name;
