@@ -5,14 +5,23 @@
 #ifndef AUTOMLDOTABOT_TORCH_LAYER_H
 #define AUTOMLDOTABOT_TORCH_LAYER_H
 
-#include "util.h"
+#include "util/util.h"
 
 NS_NN_BEGIN
 
-class Dense : public torch::nn::Cloneable<Dense>
+class TorchLayer: public torch::nn::Cloneable<TorchLayer>
 {
 public:
-    Dense(int state_dim, int action_dim, int hidden_dim):
+    virtual ~TorchLayer() {}
+    virtual torch::Tensor forward(const torch::Tensor& x) {}
+    virtual void reset() {}
+};
+
+class Dense : public TorchLayer
+{
+public:
+    virtual ~Dense() {}
+    Dense(int state_dim, int hidden_dim, int action_dim):
     state_dim(state_dim), action_dim(action_dim), hidden_dim(hidden_dim), fc1(nullptr), fc2(nullptr)
     {
         reset();
@@ -28,7 +37,7 @@ public:
         }
     }
 
-    torch::Tensor forward(const torch::Tensor& state) {
+    torch::Tensor forward(const torch::Tensor& state) override {
         torch::Tensor o = torch::tanh(fc1->forward(state));
         return fc2->forward(o);
     }

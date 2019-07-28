@@ -9,12 +9,28 @@
 
 NS_DOTACLIENT_BEGIN
 
-DotaEnv::DotaEnv(const std::string &host, short port)
-    :host(host), port(port), valid(false)
+DotaEnv::DotaEnv(const std::string &host, short port, HostMode mode)
+    :host(host), port(port), host_mode(mode), valid(false), tick(0),
+    radiant_player_id(0), dire_player_id(0)
 {
     auto channel = grpc::CreateChannel(host + ":" + std::to_string(port),
             grpc::InsecureChannelCredentials());
     env_stub = DotaService::NewStub(channel);
+    init();
+}
+
+void DotaEnv::init() {
+    radiant_net = init_net();
+    dire_net = init_net();
+}
+
+
+std::shared_ptr<nn::Net> DotaEnv::init_net() {
+    return std::make_shared<nn::Net>(0.99);
+}
+
+bool DotaEnv::game_running() {
+    return game_status == OK;
 }
 
 std::shared_ptr<CMsgBotWorldState> DotaEnv::get_state(Team team) {
@@ -32,6 +48,7 @@ std::shared_ptr<Actions> DotaEnv::get_action(Team team) {
 }
 
 void DotaEnv::reset() {
+    tick = 0;
     auto cfg = GameConfig();
 
     for (int i = 0; i < 5; ++i) {
@@ -48,10 +65,10 @@ void DotaEnv::reset() {
         hero->set_control_mode(i == 0 ? HERO_CONTROL_MODE_CONTROLLED : HERO_CONTROL_MODE_IDLE);
     }
 
-    cfg.set_host_mode(HOST_MODE_DEDICATED);
+    cfg.set_host_mode(host_mode);
     cfg.set_game_mode(DOTA_GAMEMODE_1V1MID);
-    cfg.set_ticks_per_observation(10);
-    cfg.set_host_timescale(5);
+    cfg.set_ticks_per_observation(2);
+    cfg.set_host_timescale(1);
 
     grpc::ClientContext ctx;
     InitialObservation initialObservation;
@@ -64,25 +81,100 @@ void DotaEnv::reset() {
 
     reset_action(TEAM_RADIANT);
     reset_action(TEAM_DIRE);
+
+    auto players = initialObservation.players();
+    int player_num = initialObservation.players_size();
+    for (int i = 0; i < player_num; ++i) {
+        const auto& player = players.at(i);
+        auto noop = dotautil::no_op(player.id());
+        add_action(noop, player.team_id());
+        if (player.hero() == NPC_DOTA_HERO_NEVERMORE) {
+            if (player.team_id() == TEAM_RADIANT) {
+                radiant_player_id = player.id();
+            }
+            else if (player.team_id() == TEAM_DIRE) {
+                dire_player_id = player.id();
+            }
+        }
+
+        else {
+            if (player.team_id() == TEAM_RADIANT) {
+                radiant_dummy_player.insert(player.id());
+            }
+            else if (player.team_id() == TEAM_DIRE) {
+                dire_dummy_player.insert(player.id());
+            }
+        }
+    }
+
+    send_action(TEAM_RADIANT);
+    send_action(TEAM_DIRE);
+
+    reset_action(TEAM_RADIANT);
+    reset_action(TEAM_DIRE);
 }
 
 void DotaEnv::step() {
+    std::cerr << "tick " << tick << std::endl;
     {
         grpc::ClientContext context;
         ObserveConfig ob_cfg;
         ob_cfg.set_team_id(TEAM_RADIANT);
         Observation ob;
         env_stub->observe(&context, ob_cfg, &ob);
+
         *radiant_state = ob.world_state();
+        game_status = ob.status();
+        if (game_status != 0) {
+            std::cerr << "Status " << game_status << std::endl;
+            throw std::exception();
+        }
     }
 
     {
         grpc::ClientContext context;
         ObserveConfig ob_cfg;
-        ob_cfg.set_team_id(TEAM_RADIANT);
+        ob_cfg.set_team_id(TEAM_DIRE);
         Observation ob;
         env_stub->observe(&context, ob_cfg, &ob);
         *dire_state = ob.world_state();
+    }
+
+    reset_player_id(TEAM_RADIANT);
+    reset_player_id(TEAM_DIRE);
+
+    if (dotautil::has_hero(*get_state(TEAM_RADIANT),
+            DOTA_TEAM_RADIANT, radiant_player_id)) {
+        auto rad_action = radiant_net->forward(*get_state(TEAM_RADIANT),
+                                               DOTA_TEAM_RADIANT, radiant_player_id, tick);
+        rad_action.set_player(radiant_player_id);
+        radiant_action->mutable_actions()->mutable_actions()->Add(std::move(rad_action));
+    }
+    else {
+        auto rad_noop = dotautil::no_op(radiant_player_id);
+        radiant_action->mutable_actions()->mutable_actions()->Add(std::move(rad_noop));
+    }
+
+    for (auto player_id : radiant_dummy_player) {
+        auto rad_noop = dotautil::no_op(player_id);
+        radiant_action->mutable_actions()->mutable_actions()->Add(std::move(rad_noop));
+    }
+
+    if (dotautil::has_hero(*get_state(TEAM_DIRE),
+            DOTA_TEAM_DIRE, dire_player_id)) {
+        auto d_action = dire_net->forward(*get_state(TEAM_DIRE),
+                                          DOTA_TEAM_DIRE, dire_player_id, tick);
+        d_action.set_player(dire_player_id);
+        dire_action->mutable_actions()->mutable_actions()->Add(std::move(d_action));
+    }
+    else {
+        auto dire_noop = dotautil::no_op(dire_player_id);
+        dire_action->mutable_actions()->mutable_actions()->Add(std::move(dire_noop));
+    }
+
+    for (auto player_id : dire_dummy_player) {
+        auto dire_noop = dotautil::no_op(player_id);
+        dire_action->mutable_actions()->mutable_actions()->Add(std::move(dire_noop));
     }
 
     {
@@ -97,6 +189,63 @@ void DotaEnv::step() {
         Empty empty;
         env_stub->act(&action_context, *dire_action, &empty);
         reset_action(TEAM_DIRE);
+    }
+    ++tick;
+}
+
+void DotaEnv::reset_player_id(Team team) {
+    std::shared_ptr<CMsgBotWorldState> state = get_state(team);
+
+    if (team == TEAM_RADIANT) {
+        radiant_dummy_player.clear();
+    }
+    else {
+        dire_dummy_player.clear();
+    }
+
+    int num_player = state->players().size();
+    for (int i = 0;i < num_player; ++i) {
+        auto player = state->players().at(i);
+        if (player.hero_id() == NPC_DOTA_HERO_NEVERMORE) {
+            if (player.team_id() == TEAM_RADIANT) {
+                radiant_player_id = player.player_id();
+            }
+            else {
+                dire_player_id = player.player_id();
+            }
+        }
+        else {
+            if (player.team_id() == TEAM_RADIANT) {
+                radiant_dummy_player.insert(player.player_id());
+            }
+            else {
+                dire_dummy_player.insert(player.player_id());
+            }
+        }
+    }
+}
+
+void DotaEnv::send_action(Team team) {
+    if (team == TEAM_RADIANT) {
+        grpc::ClientContext action_context;
+        Empty empty;
+        env_stub->act(&action_context, *radiant_action, &empty);
+        reset_action(TEAM_RADIANT);
+    }
+    else {
+        grpc::ClientContext action_context;
+        Empty empty;
+        env_stub->act(&action_context, *dire_action, &empty);
+        reset_action(TEAM_DIRE);
+    }
+}
+
+void DotaEnv::add_action(const CMsgBotWorldState_Action& action, Team team) {
+    if (team == TEAM_RADIANT) {
+        *radiant_action->mutable_actions()->mutable_actions()->Add() = action;
+    }
+    else {
+        *dire_action->mutable_actions()->mutable_actions()->Add() = action;
     }
 }
 

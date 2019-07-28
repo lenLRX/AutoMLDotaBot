@@ -158,7 +158,7 @@ foreach(FIL ${PROTOS})
 
             ${CMAKE_SOURCE_DIR}/thirdparty/dotaservice/dotaservice/protos/${FIL}
 
-            DEPENDS ${DOTASERVICE_PROTO} ${PROTOBUF_PROTOC_EXECUTABLE} extern_grpc
+            DEPENDS ${DOTASERVICE_PROTO} ${PROTOBUF_PROTOC_EXECUTABLE}
             COMMENT "${PROTOBUF_PROTOC_EXECUTABLE}
             --plugin=protoc-gen-grpc=${_GRPC_CPP_PLUGIN_EXECUTABLE}
             --cpp_out ${CMAKE_SOURCE_DIR}/src/protobuf
@@ -180,7 +180,7 @@ link_directories(${THIRDPARTY_INSTALL}/protobuf/lib)
 link_directories(${GRPC_INSTALL_DIR}/lib)
 
 
-add_executable(grpc_test "grpc_test.cpp" ${DOTA_PROTO_SRCS} ${DOTA_PROTO_HDRS})
+add_executable(grpc_test "grpc_test.cpp" ${DOTA_PROTO_SRCS} ${DOTA_PROTO_HDRS} include/nn/attack_layer.h)
 target_link_libraries(grpc_test
         ${_GRPC_GRPCPP_LIBRARY}
         protobuf
@@ -191,7 +191,7 @@ file(GLOB_RECURSE BOT_SOURCES RELATIVE ${CMAKE_SOURCE_DIR} "src/*.cc")
 file(GLOB_RECURSE INTERNAL_HEADERS RELATIVE ${CMAKE_SOURCE_DIR} "src/*.h")
 file(GLOB_RECURSE GLOBAL_HEADERS RELATIVE ${CMAKE_SOURCE_DIR} "include/*.h")
 
-add_executable(solo_bot ${BOT_SOURCES} ${INTERNAL_HEADERS} ${GLOBAL_HEADERS})
+add_executable(solo_bot ${BOT_SOURCES} ${INTERNAL_HEADERS} ${GLOBAL_HEADERS} src/nn/nn.cc include/nn/move_layer.h src/nn/move_layer.cc src/nn/attack_layer.cc src/nn/attack_layer.cc)
 target_link_libraries(solo_bot
         ${_GRPC_GRPCPP_LIBRARY}
         ${TORCH_CUDA_LIBRARIES}
