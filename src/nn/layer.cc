@@ -14,4 +14,36 @@ std::shared_ptr<Layer> Layer::forward_expert(const LayerForwardConfig& state) {
     throw std::runtime_error("Layer::forward_expert not implemented");
 }
 
+torch::Tensor Layer::get_masked_reward(const std::vector<float>& reward) {
+    int tick_num = ticks.size();
+    torch::Tensor ret = torch::zeros({tick_num});
+    for (int i = 0; i < tick_num; ++i) {
+        ret[i] = reward.at(ticks[i]);
+    }
+    ret.to(torch::kCUDA);
+    return ret;
+}
+
+void Layer::update_params(const Layer& other) {
+    for (const auto& p_other: other.networks) {
+        auto& p_net = networks.at(p_other.first);
+        std::shared_ptr<Dense> cloned = std::dynamic_pointer_cast<Dense>(p_other.second->get<Dense>()->clone());
+        p_net = std::make_shared<TorchLayer>(cloned);
+        p_net->get<Dense>()->eval();
+        p_net->get<Dense>()->to(torch::kCPU);
+        //cloned->to(torch::kCPU);
+    }
+}
+
+void Layer::reset() {
+    std::cerr << std::this_thread::get_id() << " Layer " << get_name() << " reset " << std::endl;
+    states.clear();
+    ticks.clear();
+    reset_custom();
+
+    for (auto c:children) {
+        c->reset();
+    }
+}
+
 NS_NN_END

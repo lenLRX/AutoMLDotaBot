@@ -24,12 +24,15 @@ public:
     std::shared_ptr<Layer> forward(const LayerForwardConfig &cfg) override ;
 
     PackedData get_training_data() override ;
-    void train(PackedData& data) override ;
+    void train(std::vector<PackedData>& data) override ;
+
+    void reset_custom() override ;
 
 private:
     void save_state(const LayerForwardConfig &cfg);
 
     std::vector<torch::Tensor> expert_action;
+    std::vector<torch::Tensor> one_hot_action;
 };
 
 NS_NN_END

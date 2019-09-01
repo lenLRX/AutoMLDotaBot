@@ -13,3 +13,4 @@ and steam must logged in
 when we enter \`jointeam spec\`
 
 TODO fix attack
+TODO thread safe update param

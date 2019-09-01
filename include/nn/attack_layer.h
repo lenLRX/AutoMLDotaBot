@@ -25,8 +25,9 @@ public:
 
     CMsgBotWorldState_Action get_action() final ;
 
+    void reset_custom() override ;
     PackedData get_training_data() override ;
-    void train(PackedData& data) override ;
+    void train(std::vector<PackedData>& data) override ;
 
 private:
 
@@ -37,6 +38,10 @@ private:
     // length of each tick states
     std::vector<int> state_len;
     std::vector<int> expert_action;
+    std::vector<int> actual_action_idx;
+    std::vector<int> tick_offset;
+    std::vector<torch::Tensor> actual_state;
+    std::vector<int> actual_expert_act;
 };
 
 NS_NN_END

@@ -24,7 +24,7 @@
 #define NS_UTIL_END }
 
 
-static const float lr = 1e-3;
+static const float lr = 1e-4;
 
 static const float near_by_scale = 2000;
 

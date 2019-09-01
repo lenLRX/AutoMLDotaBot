@@ -52,6 +52,7 @@ public:
 
     // return the last layer
     virtual std::shared_ptr<Layer> forward(const LayerForwardConfig &cfg) {
+        std::cerr << get_name() << " using default layer forward" << std::endl;
         ticks.push_back(cfg.tick);
         if (cfg.expert_action) {
             return forward_expert(cfg);
@@ -64,8 +65,15 @@ public:
     virtual std::shared_ptr<Layer> forward_impl(const LayerForwardConfig &cfg) = 0;
     virtual CMsgBotWorldState_Action get_action();
 
+    torch::Tensor get_masked_reward(const std::vector<float>& reward);
+
+    virtual void update_params(const Layer& other);
+
     virtual PackedData get_training_data() = 0;
-    virtual void train(PackedData& data) = 0;
+    virtual void train(std::vector<PackedData>& data) = 0;
+    void reset();
+
+    virtual void reset_custom() {}
 
     NetWorks networks;
     std::vector<Ptr> children;

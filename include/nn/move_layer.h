@@ -26,11 +26,13 @@ public:
     CMsgBotWorldState_Action get_action() final ;
 
     PackedData get_training_data() override ;
-    void train(PackedData& data) override ;
+    void train(std::vector<PackedData>& data) override ;
+    void reset_custom() override ;
 
 private:
     void save_state(const LayerForwardConfig &cfg);
     std::vector<torch::Tensor> expert_action;
+    std::vector<torch::Tensor> move_action;
     std::pair<float, float> target_pos;
 };
 

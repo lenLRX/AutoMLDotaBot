@@ -9,15 +9,21 @@
 
 NS_NN_BEGIN
 
-class TorchLayer: public torch::nn::Cloneable<TorchLayer>
+class TorchLayer
 {
 public:
+    TorchLayer(std::shared_ptr<void> p_layer):layer_(p_layer) {}
     virtual ~TorchLayer() {}
-    virtual torch::Tensor forward(const torch::Tensor& x) {}
-    virtual void reset() {}
+
+    template <typename T>
+    T* get() {
+        return static_cast<T*>(layer_.get());
+    }
+
+    std::shared_ptr<void> layer_;
 };
 
-class Dense : public TorchLayer
+class Dense :public torch::nn::Cloneable<Dense>
 {
 public:
     virtual ~Dense() {}
@@ -25,6 +31,19 @@ public:
     state_dim(state_dim), action_dim(action_dim), hidden_dim(hidden_dim), fc1(nullptr), fc2(nullptr)
     {
         reset();
+    }
+
+    torch::Tensor forward(const torch::Tensor& state) {
+        torch::Tensor o = torch::tanh(fc1->forward(state));
+        return fc2->forward(o);
+    }
+
+    void reset() override {
+        fc1 = torch::nn::Linear(state_dim, hidden_dim);
+        fc2 = torch::nn::Linear(hidden_dim, action_dim);
+        register_module("fc_1", fc1);
+        register_module("fc_2", fc2);
+
         for (auto& param : named_parameters())
         {
             int dim_ = param.value().dim();
@@ -35,18 +54,6 @@ public:
                 torch::nn::init::constant_(param.value(), 0);
             }
         }
-    }
-
-    torch::Tensor forward(const torch::Tensor& state) override {
-        torch::Tensor o = torch::tanh(fc1->forward(state));
-        return fc2->forward(o);
-    }
-
-    void reset() override {
-        fc1 = torch::nn::Linear(state_dim, hidden_dim);
-        fc2 = torch::nn::Linear(hidden_dim, action_dim);
-        register_module("fc_1", fc1);
-        register_module("fc_2", fc2);
     }
 
     int state_dim;

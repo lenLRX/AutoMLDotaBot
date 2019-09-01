@@ -9,9 +9,9 @@
 
 NS_DOTACLIENT_BEGIN
 
-DotaEnv::DotaEnv(const std::string &host, short port, HostMode mode)
-    :host(host), port(port), host_mode(mode), valid(false), tick(0),
-    radiant_player_id(0), dire_player_id(0)
+DotaEnv::DotaEnv(const std::string &host, short port, HostMode mode, int max_game_time, bool expert_action)
+    :host(host), port(port), host_mode(mode), max_game_time(max_game_time), expert_action(expert_action), valid(false), tick(0),
+    radiant_player_id(0), dire_player_id(0), game_status(OK)
 {
     auto channel = grpc::CreateChannel(host + ":" + std::to_string(port),
             grpc::InsecureChannelCredentials());
@@ -48,7 +48,11 @@ std::shared_ptr<Actions> DotaEnv::get_action(Team team) {
 }
 
 void DotaEnv::reset() {
+    std::cerr << std::this_thread::get_id() << "env::reset" << std::endl;
+    radiant_net->reset();
+    dire_net->reset();
     tick = 0;
+    game_status = OK;
     auto cfg = GameConfig();
 
     for (int i = 0; i < 5; ++i) {
@@ -67,8 +71,9 @@ void DotaEnv::reset() {
 
     cfg.set_host_mode(host_mode);
     cfg.set_game_mode(DOTA_GAMEMODE_1V1MID);
-    cfg.set_ticks_per_observation(2);
-    cfg.set_host_timescale(1);
+    //cfg.set_ticks_per_observation(2);
+    cfg.set_ticks_per_observation(10);
+    cfg.set_host_timescale(10);
 
     grpc::ClientContext ctx;
     InitialObservation initialObservation;
@@ -115,7 +120,6 @@ void DotaEnv::reset() {
 }
 
 void DotaEnv::step() {
-    std::cerr << "tick " << tick << std::endl;
     {
         grpc::ClientContext context;
         ObserveConfig ob_cfg;
@@ -126,8 +130,8 @@ void DotaEnv::step() {
         *radiant_state = ob.world_state();
         game_status = ob.status();
         if (game_status != 0) {
-            std::cerr << "Status " << game_status << std::endl;
-            throw std::exception();
+            std::cerr << std::this_thread::get_id() << " Status " << game_status << std::endl;
+            //throw std::exception();
         }
     }
 
@@ -146,13 +150,14 @@ void DotaEnv::step() {
     if (dotautil::has_hero(*get_state(TEAM_RADIANT),
             DOTA_TEAM_RADIANT, radiant_player_id)) {
         auto rad_action = radiant_net->forward(*get_state(TEAM_RADIANT),
-                                               DOTA_TEAM_RADIANT, radiant_player_id, tick);
+                                               DOTA_TEAM_RADIANT, radiant_player_id, tick, expert_action);
         rad_action.set_player(radiant_player_id);
         radiant_action->mutable_actions()->mutable_actions()->Add(std::move(rad_action));
     }
     else {
         auto rad_noop = dotautil::no_op(radiant_player_id);
         radiant_action->mutable_actions()->mutable_actions()->Add(std::move(rad_noop));
+        radiant_net->padding_reward();
     }
 
     for (auto player_id : radiant_dummy_player) {
@@ -163,13 +168,14 @@ void DotaEnv::step() {
     if (dotautil::has_hero(*get_state(TEAM_DIRE),
             DOTA_TEAM_DIRE, dire_player_id)) {
         auto d_action = dire_net->forward(*get_state(TEAM_DIRE),
-                                          DOTA_TEAM_DIRE, dire_player_id, tick);
+                                          DOTA_TEAM_DIRE, dire_player_id, tick, expert_action);
         d_action.set_player(dire_player_id);
         dire_action->mutable_actions()->mutable_actions()->Add(std::move(d_action));
     }
     else {
         auto dire_noop = dotautil::no_op(dire_player_id);
         dire_action->mutable_actions()->mutable_actions()->Add(std::move(dire_noop));
+        dire_net->padding_reward();
     }
 
     for (auto player_id : dire_dummy_player) {
@@ -191,6 +197,31 @@ void DotaEnv::step() {
         reset_action(TEAM_DIRE);
     }
     ++tick;
+
+    if (tick > max_game_time) {
+        game_status = OUT_OF_RANGE;
+    }
+}
+
+
+nn::ReplayBuffer DotaEnv::get_replay_buffer(Team team) {
+    if (team == TEAM_RADIANT) {
+        radiant_net->collect_training_data();
+        return radiant_net->get_replay_buffer();
+    }
+    else if (team == TEAM_DIRE) {
+        dire_net->collect_training_data();
+        return dire_net->get_replay_buffer();
+    }
+}
+
+void DotaEnv::update_param(Team team, const nn::Net& net) {
+    if (team == TEAM_RADIANT) {
+        radiant_net->update_param(net);
+    }
+    else if (team == TEAM_DIRE) {
+        dire_net->update_param(net);
+    }
 }
 
 void DotaEnv::reset_player_id(Team team) {

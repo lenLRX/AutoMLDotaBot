@@ -14,9 +14,9 @@ const static int hidden_shape = 128;
 const static int output_shape = 2;
 
 MoveLayer::MoveLayer() {
-    networks["actor"] = std::make_shared<Dense>(input_shape, hidden_shape, output_shape);
-    networks["critic"] = std::make_shared<Dense>(input_shape, hidden_shape, 1);
-    networks["discriminator"] = std::make_shared<Dense>(input_shape + output_shape, hidden_shape, 1);
+    networks["actor"] = std::make_shared<TorchLayer>(std::make_shared<Dense>(input_shape, hidden_shape, output_shape));
+    networks["critic"] = std::make_shared<TorchLayer>(std::make_shared<Dense>(input_shape + output_shape, hidden_shape, 1));
+    networks["discriminator"] = std::make_shared<TorchLayer>(std::make_shared<Dense>(input_shape + output_shape, hidden_shape, 1));
 }
 
 static std::pair<float, float> get_move_vec(torch::Tensor x) {
@@ -31,7 +31,7 @@ std::shared_ptr<Layer> MoveLayer::forward_impl(const LayerForwardConfig &cfg) {
     const auto& location = hero.location();
     torch::Tensor x = dotautil::state_encoding(cfg.state, cfg.team_id, cfg.player_id);
 
-    auto out = networks.at("actor")->forward(x);
+    auto out = networks.at("actor")->get<Dense>()->forward(x);
 
     // range (-1,1)
     auto action = torch::tanh(out);
@@ -45,6 +45,8 @@ std::shared_ptr<Layer> MoveLayer::forward_impl(const LayerForwardConfig &cfg) {
     target_pos = get_move_vec(action);
     target_pos.first += hero.location().x();
     target_pos.second += hero.location().y();
+
+    move_action.push_back(action);
 
     return std::shared_ptr<Layer>();
 }
@@ -98,6 +100,7 @@ std::shared_ptr<Layer> MoveLayer::forward_expert(const LayerForwardConfig &cfg) 
     expert[1] = target_pos.second - hero.location().y();
 
     expert_action.push_back(expert);
+    move_action.push_back(expert);
 
     return std::shared_ptr<Layer>();
 }
@@ -119,13 +122,128 @@ void MoveLayer::save_state(const LayerForwardConfig &cfg) {
 
 MoveLayer::PackedData MoveLayer::get_training_data() {
     PackedData ret;
-    ret["state"] = torch::stack(states);
-    ret["expert_action"] = torch::stack(expert_action);
+    if (states.empty()) {
+        return ret;
+    }
+    ret["state"] = torch::stack(states).to(torch::kCUDA);
+    ret["expert_action"] = torch::stack(expert_action).to(torch::kCUDA);
+    ret["move_action"] = torch::stack(move_action).to(torch::kCUDA);
     return ret;
 }
 
-void MoveLayer::train(PackedData& data){
+void MoveLayer::train(std::vector<PackedData>& data){
+    auto& actor = *networks["actor"]->get<Dense>();
+    auto& critic = *networks["critic"]->get<Dense>();
+    auto& discriminator = *networks["discriminator"]->get<Dense>();
+    torch::optim::SGD actor_optim(actor.parameters(),
+                                  torch::optim::SGDOptions(lr));
 
+    torch::optim::SGD critic_optim(critic.parameters(),
+                                   torch::optim::SGDOptions(lr));
+
+    torch::optim::SGD d_optim(discriminator.parameters(),
+                              torch::optim::SGDOptions(lr));
+
+    auto logger = spdlog::get("loss_logger");
+
+    actor.train(true);
+    actor.to(torch::kCUDA);
+    critic.train(true);
+    critic.to(torch::kCUDA);
+    discriminator.train(true);
+    discriminator.to(torch::kCUDA);
+
+    torch::Device dev = torch::kCUDA;
+
+    auto avg_total_loss = torch::zeros({1});
+    auto avg_actor_loss = torch::zeros({1});
+    auto avg_critic_loss = torch::zeros({1});
+    auto avg_actor_d_loss = torch::zeros({1});
+    int active_data_num = 0;
+
+    for (const auto& p_data:data) {
+        actor_optim.zero_grad();
+        critic_optim.zero_grad();
+        d_optim.zero_grad();
+
+        if (p_data.count("state") == 0) {
+            continue;
+        }
+
+        active_data_num++;
+
+        torch::Tensor state = p_data.at("state").to(dev);
+        torch::Tensor expert_act = p_data.at("expert_action").to(dev);
+        torch::Tensor move_act = p_data.at("move_action").to(dev);
+        torch::Tensor reward = p_data.at("reward").to(dev);
+
+        torch::Tensor expert_prob = torch::sigmoid(discriminator.forward(
+                torch::cat({ state, expert_act }, state.dim() - 1)));
+        torch::Tensor expert_label = torch::ones_like(expert_prob);
+        torch::Tensor expert_d_loss = torch::binary_cross_entropy(expert_prob, expert_label).mean();
+
+        torch::Tensor actor_action_ = actor.forward(state);
+        torch::Tensor actor_prob = torch::sigmoid(discriminator.forward(
+                torch::cat({state, actor_action_.detach()}, state.dim() - 1)));
+        torch::Tensor actor_label = torch::zeros_like(actor_prob);
+        torch::Tensor actor_d_loss = torch::binary_cross_entropy(actor_prob, actor_label).mean();
+
+        torch::Tensor prob_diff = torch::relu(expert_prob - actor_prob).detach();
+
+        torch::Tensor total_d_loss = expert_d_loss + actor_d_loss;
+
+        total_d_loss.backward();
+
+        d_optim.step();
+
+        actor_optim.zero_grad();
+        critic_optim.zero_grad();
+
+        torch::Tensor state_act = torch::cat({state, move_act}, state.dim() - 1);
+
+        torch::Tensor actor_prob2 = torch::sigmoid(discriminator.forward(
+                state_act));
+        torch::Tensor actor_label2 = torch::ones_like(actor_prob2);
+
+        torch::Tensor actor_d_loss2 = (torch::relu(torch::binary_cross_entropy(actor_prob2, actor_label2) - 0.1))*prob_diff.mean();
+
+        torch::Tensor values = critic.forward(state_act).squeeze();
+        torch::Tensor critic_loss = reward - values;
+        critic_loss = critic_loss * critic_loss;
+        critic_loss = critic_loss.mean();
+
+        torch::Tensor adv = reward - values.detach();
+
+        torch::Tensor actor_loss = -values;
+        actor_loss = actor_loss.mean();
+
+        avg_actor_loss += actor_loss;
+        avg_actor_d_loss += actor_d_loss2;
+        avg_critic_loss += critic_loss;
+
+        torch::Tensor total_loss = actor_d_loss2 + actor_loss + critic_loss;
+        avg_total_loss += total_loss;
+        total_loss.backward();
+
+
+
+        critic_optim.step();
+        actor_optim.step();
+    }
+
+    if (active_data_num) {
+        logger->info("episode {} {}, training actor d loss: {} actor loss: {} critic_loss: {} ", 0, get_name(), dotautil::torch_to_string(avg_actor_d_loss / active_data_num),
+                     dotautil::torch_to_string(avg_actor_loss / active_data_num), dotautil::torch_to_string(avg_critic_loss / active_data_num));
+
+        logger->info("episode {} {}, training total loss: {}", 0, get_name(), dotautil::torch_to_string(avg_total_loss / active_data_num));
+    }
+
+}
+
+void MoveLayer::reset_custom() {
+    expert_action.clear();
+    move_action.clear();
+    target_pos = std::pair<int, int>();
 }
 
 

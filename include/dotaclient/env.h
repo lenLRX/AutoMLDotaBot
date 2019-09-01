@@ -18,7 +18,8 @@ NS_DOTACLIENT_BEGIN
 
 class DotaEnv {
 public:
-    DotaEnv(const std::string& host, short port, HostMode mode);
+    DotaEnv(const std::string& host, short port,
+            HostMode mode, int max_game_time, bool expert_action = false);
 
     bool game_running();
 
@@ -28,6 +29,10 @@ public:
     std::shared_ptr<Actions> get_action(Team team);
 
     void step();
+
+    nn::ReplayBuffer get_replay_buffer(Team team);
+
+    void update_param(Team team, const nn::Net& net);
 
 private:
     void init();
@@ -42,6 +47,8 @@ private:
     std::string host;
     short port;
     HostMode host_mode;
+    int max_game_time;
+    bool expert_action;
     bool valid;
     std::shared_ptr<DotaService::Stub> env_stub;
 
