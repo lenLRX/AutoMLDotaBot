@@ -63,11 +63,12 @@ public:
     virtual std::shared_ptr<Layer> forward_expert(const LayerForwardConfig& cfg);
 
     virtual std::shared_ptr<Layer> forward_impl(const LayerForwardConfig &cfg) = 0;
+
     virtual CMsgBotWorldState_Action get_action();
 
     torch::Tensor get_masked_reward(const std::vector<float>& reward);
 
-    virtual void update_params(const Layer& other);
+    virtual void update_params(Layer& other);
 
     virtual PackedData get_training_data() = 0;
     virtual void train(std::vector<PackedData>& data) = 0;
@@ -81,6 +82,7 @@ public:
 
     std::vector<torch::Tensor> states;
     std::vector<int> ticks;
+    std::mutex mtx;
 };
 
 

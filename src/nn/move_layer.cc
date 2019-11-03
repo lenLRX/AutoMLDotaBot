@@ -6,24 +6,77 @@
 #include "util/util.h"
 
 #include <exception>
+#include <fstream>
 
 NS_NN_BEGIN
 
-const static int input_shape = 10;
-const static int hidden_shape = 128;
+const static int input_shape = 12;
+const static int hidden_shape = 256;
 const static int output_shape = 2;
 
-MoveLayer::MoveLayer() {
+const static float max_map_size = 8000;
+const static float move_scale = 1500;
+const static float move_scale_sqrt = 2121.32;
+
+MoveLayer::MoveLayer(): dist(0), z(0) {
     networks["actor"] = std::make_shared<TorchLayer>(std::make_shared<Dense>(input_shape, hidden_shape, output_shape));
     networks["critic"] = std::make_shared<TorchLayer>(std::make_shared<Dense>(input_shape + output_shape, hidden_shape, 1));
     networks["discriminator"] = std::make_shared<TorchLayer>(std::make_shared<Dense>(input_shape + output_shape, hidden_shape, 1));
 }
 
 static std::pair<float, float> get_move_vec(torch::Tensor x) {
-    x = x * 300;
+    x = x * move_scale;
     std::pair<float, float> out_(dotautil::to_number<float>(x[0]), dotautil::to_number<float>(x[1]));
     return out_;
 }
+
+static float atk_range = 450.0f;
+static float map_bound = 8000.0f;
+
+#define SAVE_EXPERT_ACTION()  if (enemy_creeps.empty() || dotautil::filter_units_by_type(enemy_creeps, CMsgBotWorldState_UnitType_LANE_CREEP).empty()) {\
+                                    tmp_target_pos.first = -500;\
+                                    tmp_target_pos.second = -500;\
+                                }\
+                                else {\
+                                auto nearest_enemy = dotautil::get_nearest_unit(enemy_creeps, hero);\
+                                float nearest_enemy_x = nearest_enemy.location().x();\
+                                float nearest_enemy_y = nearest_enemy.location().y();\
+                                if (cfg.team_id == DOTA_TEAM_DIRE) {\
+                                    float d = (map_bound - nearest_enemy_x)*(map_bound - nearest_enemy_x) +\
+                                    (map_bound - nearest_enemy_y) * (map_bound - nearest_enemy_y);\
+                                    d = sqrtf(d);\
+                                    float d_dot = d - atk_range;\
+                                    float x_dot = d_dot / d * (map_bound - nearest_enemy_x);\
+                                    float y_dot = d_dot / d * (map_bound - nearest_enemy_y);\
+                                    tmp_target_pos.first = map_bound - x_dot;\
+                                    tmp_target_pos.second = map_bound - y_dot;\
+                                }\
+                                else {\
+                                    float d = (map_bound + nearest_enemy_x)*(map_bound + nearest_enemy_x) +\
+                                    (nearest_enemy_y + map_bound) * (nearest_enemy_y + map_bound);\
+                                    d = sqrtf(d);\
+                                    float d_dot = d - atk_range;\
+                                    float x_dot = d_dot / d * (map_bound + nearest_enemy_x);\
+                                    float y_dot = d_dot / d * (map_bound + nearest_enemy_y);\
+                                    tmp_target_pos.first = x_dot - map_bound;\
+                                    tmp_target_pos.second = y_dot - map_bound;\
+                                }\
+                                }\
+                                torch::Tensor expert = torch::zeros({2});\
+                                float dx = tmp_target_pos.first - location.x();\
+                                float dy = tmp_target_pos.second - location.y();\
+                                float l = sqrtf(dx*dx + dy*dy);\
+                                if (l > move_scale_sqrt) {\
+                                dx = dx / l * 1.414;\
+                                dy = dy / l * 1.414;\
+                                }\
+                                else {\
+                                dx = dx / move_scale;\
+                                dy = dy / move_scale;\
+                                }\
+                                expert[0] = dx;\
+                                expert[1] = dy;\
+                                expert = expert;
 
 std::shared_ptr<Layer> MoveLayer::forward_impl(const LayerForwardConfig &cfg) {
     CMsgBotWorldState_Unit hero = dotautil::get_hero(cfg.state, cfg.team_id, cfg.player_id);
@@ -36,16 +89,30 @@ std::shared_ptr<Layer> MoveLayer::forward_impl(const LayerForwardConfig &cfg) {
     // range (-1,1)
     auto action = torch::tanh(out);
 
-    if (states.size() == 1) {
-        auto action_logger = spdlog::get("action_logger");
-        action_logger->info("{} first tick\nmy action\n{}\n-------",
+    /*
+    auto action_logger = spdlog::get("action_logger");
+    action_logger->info("{} first tick\nmy action\n{}\n-------",
                             get_name(), dotautil::torch_to_string(action));
-    }
+    */
 
     target_pos = get_move_vec(action);
-    target_pos.first += hero.location().x();
-    target_pos.second += hero.location().y();
+    dist = sqrtf(target_pos.first * target_pos.first + target_pos.second * target_pos.second);
+    target_pos.first += location.x();
+    target_pos.second += location.y();
+    z = location.z();
 
+    auto nearby_units = dotautil::get_nearby_unit(cfg.state, hero, 1500);
+    uint32_t opposed_team = dotautil::get_opposed_team(hero.team_id());
+    auto enemy_creeps = dotautil::filter_units_by_team(nearby_units, opposed_team);
+    enemy_creeps = dotautil::filter_attackable_units(enemy_creeps);
+
+    std::pair<float, float> tmp_target_pos;
+    SAVE_EXPERT_ACTION();
+
+    //action_logger->info("{} first tick\nexpert action\n{}\n-------",
+    //                    get_name(), dotautil::torch_to_string(expert_action));
+
+    expert_action.push_back(expert);
     move_action.push_back(action);
 
     return std::shared_ptr<Layer>();
@@ -53,13 +120,22 @@ std::shared_ptr<Layer> MoveLayer::forward_impl(const LayerForwardConfig &cfg) {
 
 CMsgBotWorldState_Action MoveLayer::get_action(){
     CMsgBotWorldState_Action ret;
-    ret.set_actiontype(CMsgBotWorldState_Action_Type_DOTA_UNIT_ORDER_MOVE_TO_POSITION);
-    auto* target_loc = ret.mutable_movetolocation()->mutable_location();
+    if (dist < 200) {
+        ret.set_actiontype(CMsgBotWorldState_Action_Type_DOTA_UNIT_ORDER_MOVE_DIRECTLY);
+        auto* target_loc = ret.mutable_movedirectly()->mutable_location();
+        target_loc->set_z(0.0);
+        target_loc->set_x(target_pos.first);
+        target_loc->set_y(target_pos.second);
+    }
+    else {
+        ret.set_actiontype(CMsgBotWorldState_Action_Type_DOTA_UNIT_ORDER_MOVE_TO_POSITION);
 
-    target_loc->set_z(0.0);
+        auto* target_loc = ret.mutable_movetolocation()->mutable_location();
 
-    target_loc->set_x(target_pos.first);
-    target_loc->set_y(target_pos.second);
+        target_loc->set_z(0.0);
+        target_loc->set_x(target_pos.first);
+        target_loc->set_y(target_pos.second);
+    }
 
     return ret;
 }
@@ -74,30 +150,19 @@ std::shared_ptr<Layer> MoveLayer::forward_expert(const LayerForwardConfig &cfg) 
     std::vector<torch::Tensor> expert_action_cache;
     std::vector<torch::Tensor> actor_action_cache;
 
-    auto nearby_units = dotautil::get_nearby_unit(cfg.state, hero, 400);
+    auto nearby_units = dotautil::get_nearby_unit(cfg.state, hero, 1500);
 
     uint32_t opposed_team = dotautil::get_opposed_team(hero.team_id());
 
     auto enemy_creeps = dotautil::filter_units_by_team(nearby_units, opposed_team);
     enemy_creeps = dotautil::filter_attackable_units(enemy_creeps);
-    if (enemy_creeps.empty()) {
-        target_pos.first = -500;
-        target_pos.second = -500;
-    }
-    else {
-        if (cfg.team_id == DOTA_TEAM_DIRE) {
-            target_pos.first = 300;
-            target_pos.second = 300;
-        }
-        else {
-            target_pos.first = -1300;
-            target_pos.second = -1300;
-        }
-    }
 
-    torch::Tensor expert = torch::zeros({2});
-    expert[0] = target_pos.first - hero.location().x();
-    expert[1] = target_pos.second - hero.location().y();
+    std::pair<float, float> tmp_target_pos;
+    SAVE_EXPERT_ACTION();
+
+    target_pos = tmp_target_pos;
+    dist = sqrtf(target_pos.first * target_pos.first + target_pos.second * target_pos.second);
+    z = hero.location().z();
 
     expert_action.push_back(expert);
     move_action.push_back(expert);
@@ -177,12 +242,13 @@ void MoveLayer::train(std::vector<PackedData>& data){
         torch::Tensor move_act = p_data.at("move_action").to(dev);
         torch::Tensor reward = p_data.at("reward").to(dev);
 
+/*
         torch::Tensor expert_prob = torch::sigmoid(discriminator.forward(
                 torch::cat({ state, expert_act }, state.dim() - 1)));
         torch::Tensor expert_label = torch::ones_like(expert_prob);
         torch::Tensor expert_d_loss = torch::binary_cross_entropy(expert_prob, expert_label).mean();
 
-        torch::Tensor actor_action_ = actor.forward(state);
+        torch::Tensor actor_action_ = torch::tanh(actor.forward(state));
         torch::Tensor actor_prob = torch::sigmoid(discriminator.forward(
                 torch::cat({state, actor_action_.detach()}, state.dim() - 1)));
         torch::Tensor actor_label = torch::zeros_like(actor_prob);
@@ -195,47 +261,52 @@ void MoveLayer::train(std::vector<PackedData>& data){
         total_d_loss.backward();
 
         d_optim.step();
+*/
 
-        actor_optim.zero_grad();
         critic_optim.zero_grad();
 
-        torch::Tensor state_act = torch::cat({state, move_act}, state.dim() - 1);
+        torch::Tensor actor_action_ = torch::tanh(actor.forward(state));
+
+        torch::Tensor state_act = torch::cat({state, actor_action_.detach()}, state.dim() - 1);
 
         torch::Tensor actor_prob2 = torch::sigmoid(discriminator.forward(
                 state_act));
-        torch::Tensor actor_label2 = torch::ones_like(actor_prob2);
+        //torch::Tensor actor_label2 = torch::ones_like(actor_prob2);
 
-        torch::Tensor actor_d_loss2 = (torch::relu(torch::binary_cross_entropy(actor_prob2, actor_label2) - 0.1))*prob_diff.mean();
+        //torch::Tensor actor_d_loss2 = (torch::relu(torch::binary_cross_entropy(actor_prob2, actor_label2) - 0.1))*prob_diff.mean();
 
         torch::Tensor values = critic.forward(state_act).squeeze();
         torch::Tensor critic_loss = reward - values;
         critic_loss = critic_loss * critic_loss;
         critic_loss = critic_loss.mean();
+        critic_loss.backward();
+        critic_optim.step();
 
-        torch::Tensor adv = reward - values.detach();
+        avg_critic_loss += critic_loss;
 
-        torch::Tensor actor_loss = -values;
+        actor_optim.zero_grad();
+
+        torch::Tensor actor_loss = -critic.forward(torch::cat({state, actor_action_}, state.dim() - 1)).squeeze();
         actor_loss = actor_loss.mean();
 
         avg_actor_loss += actor_loss;
-        avg_actor_d_loss += actor_d_loss2;
-        avg_critic_loss += critic_loss;
+        //avg_actor_d_loss += actor_d_loss2;
 
-        torch::Tensor total_loss = actor_d_loss2 + actor_loss + critic_loss;
+
+        torch::Tensor total_loss = ((actor_action_ - expert_act)*(actor_action_ - expert_act)).mean();
         avg_total_loss += total_loss;
         total_loss.backward();
 
-
-
-        critic_optim.step();
         actor_optim.step();
     }
 
     if (active_data_num) {
-        logger->info("episode {} {}, training actor d loss: {} actor loss: {} critic_loss: {} ", 0, get_name(), dotautil::torch_to_string(avg_actor_d_loss / active_data_num),
+        logger->info("episode {} {}, training actor d loss: {} actor loss: {} critic_loss: {} ", 0,
+                get_name(), dotautil::torch_to_string(avg_actor_d_loss / active_data_num),
                      dotautil::torch_to_string(avg_actor_loss / active_data_num), dotautil::torch_to_string(avg_critic_loss / active_data_num));
 
-        logger->info("episode {} {}, training total loss: {}", 0, get_name(), dotautil::torch_to_string(avg_total_loss / active_data_num));
+        logger->info("episode {} {}, training total loss: {}", 0, get_name(),
+                dotautil::torch_to_string(avg_total_loss / active_data_num));
     }
 
 }

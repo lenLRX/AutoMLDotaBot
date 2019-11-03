@@ -54,6 +54,10 @@ Units get_nearby_unit(const CMsgBotWorldState& state,
 
 Units filter_units_by_team(const Units& units, uint32_t team_id);
 
+Units filter_units_by_type(const Units& units, CMsgBotWorldState_UnitType type);
+
+CMsgBotWorldState_Unit get_nearest_unit(const Units& units, const CMsgBotWorldState_Unit& target);
+
 Units filter_attackable_units(const Units& units);
 
 uint32_t get_opposed_team(uint32_t team_id);

@@ -26,7 +26,7 @@ void DotaEnv::init() {
 
 
 std::shared_ptr<nn::Net> DotaEnv::init_net() {
-    return std::make_shared<nn::Net>(0.99);
+    return std::make_shared<nn::Net>(0.7);
 }
 
 bool DotaEnv::game_running() {
@@ -72,7 +72,7 @@ void DotaEnv::reset() {
     cfg.set_host_mode(host_mode);
     cfg.set_game_mode(DOTA_GAMEMODE_1V1MID);
     //cfg.set_ticks_per_observation(2);
-    cfg.set_ticks_per_observation(10);
+    cfg.set_ticks_per_observation(4);
     cfg.set_host_timescale(10);
 
     grpc::ClientContext ctx;

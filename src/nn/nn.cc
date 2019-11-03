@@ -10,7 +10,7 @@
 NS_NN_BEGIN
 
 Net::Net(float discount_factor)
-        :d_factor(discount_factor), last_reward(0), prev_last_hit(0) {
+        :d_factor(discount_factor), last_reward(0), prev_last_hit(0), prev_health(0) {
     auto root_ptr = new HighLevelDecision();
     root.reset(root_ptr);
     //TODO auto rename
@@ -31,9 +31,15 @@ CMsgBotWorldState_Action Net::forward(const CMsgBotWorldState& state,
     const CMsgBotWorldState_Unit& hero = dotautil::get_hero(cfg.state,
                                                             cfg.team_id, cfg.player_id);
 
-    uint32_t reward = hero.last_hits() - prev_last_hit;
+    float reward = hero.last_hits() - prev_last_hit;
+    float hp_reward = 0;
+    if (hero.health() < prev_health) {
+        hp_reward = -1;
+    }
 
-    rewards.push_back(0);
+    rewards.push_back(hp_reward);
+
+    prev_health = hero.health();
 
     return last_layer->get_action();
 }
@@ -63,11 +69,18 @@ std::vector<float> Net::get_discounted_reward() {
 
     rewards.push_back(last_reward);
 
+    float total_reward = 0;
+
     float r = 0;// may be should be value
     for (auto rit = rewards.rbegin(); rit != rewards.rend(); ++rit) {
         r = *rit + d_factor * r;
+        if (r < -1) {
+            r = -1;
+        }
         ret.push_back(r);
+        total_reward += *rit;
     }
+    std::cerr << "total reward: " << total_reward << std::endl;
     std::reverse(ret.begin(), ret.end());
     return ret;
 }

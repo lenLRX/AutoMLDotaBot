@@ -6,8 +6,8 @@
 NS_NN_BEGIN
 
 
-const static int input_shape = 10;
-const static int hidden_shape = 128;
+const static int input_shape = 12;
+const static int hidden_shape = 256;
 const static int output_shape = 2;
 
 
@@ -16,6 +16,12 @@ HighLevelDecision::HighLevelDecision() {
     networks["critic"] = std::make_shared<TorchLayer>(std::make_shared<Dense>(input_shape, hidden_shape, 1));
     networks["discriminator"] = std::make_shared<TorchLayer>(std::make_shared<Dense>(input_shape + output_shape, hidden_shape, 1));
 }
+
+#define SAVE_EXPERT_ACTION() for (const auto& creep:nearby_enemy) {\
+                                if (creep.health() < hero_atk * 1.5) {\
+                                    expert_idx = 1;\
+                                }\
+                            }
 
 std::shared_ptr<Layer> HighLevelDecision::forward_impl(const LayerForwardConfig &cfg) {
     CMsgBotWorldState_Unit hero = dotautil::get_hero(cfg.state, cfg.team_id, cfg.player_id);
@@ -27,8 +33,9 @@ std::shared_ptr<Layer> HighLevelDecision::forward_impl(const LayerForwardConfig 
 
     auto action_prob = torch::softmax(out, 0);
     float max_prob = dotautil::to_number<float>(torch::max(action_prob));
+    auto action = torch::argmax(action_prob);
 
-    auto action = action_prob.multinomial(1);
+    //auto action = action_prob.multinomial(1);
 
     int idx = dotautil::to_number<int>(action);
 
@@ -40,6 +47,14 @@ std::shared_ptr<Layer> HighLevelDecision::forward_impl(const LayerForwardConfig 
     if (nearby_enemy.empty()) {
         idx = 0;
     }
+
+    int hero_atk = hero.attack_damage();
+    int expert_idx = 0;
+    SAVE_EXPERT_ACTION();
+
+    torch::Tensor expert = torch::zeros({2});
+    expert[expert_idx] = 1;
+    expert_action.push_back(expert);
 
     torch::Tensor act = torch::zeros({2});
     act[idx] = 1;
@@ -58,26 +73,21 @@ std::shared_ptr<Layer> HighLevelDecision::forward_expert(const LayerForwardConfi
     uint32_t opposed_team = dotautil::get_opposed_team(hero.team_id());
 
     int hero_atk = hero.attack_damage();
-
-    int idx = 0;
+    int expert_idx = 0;
 
     dotautil::Units nearby_enemy = dotautil::filter_units_by_team(nearby_units, opposed_team);
     nearby_enemy = dotautil::filter_attackable_units(nearby_enemy);
-    for (const auto& creep:nearby_enemy) {
-        if (creep.health() < hero_atk * 1.2) {
-            idx = 1;
-        }
-    }
+    SAVE_EXPERT_ACTION();
 
     torch::Tensor expert = torch::zeros({2});
-    expert[idx] = 1;
+    expert[expert_idx] = 1;
     expert_action.push_back(expert);
 
     torch::Tensor act = torch::zeros({2});
-    act[idx] = 1;
+    act[expert_idx] = 1;
     one_hot_action.push_back(act);
 
-    auto ret_layer = children.at(idx);
+    auto ret_layer = children.at(expert_idx);
     ret_layer->forward(cfg);
     return ret_layer;
 }
@@ -153,6 +163,7 @@ void HighLevelDecision::train(std::vector<PackedData>& data){
 
             torch::Tensor reward = p_data.at("reward").to(dev);
 
+            /*
             torch::Tensor expert_prob = torch::sigmoid(discriminator.forward(
                     torch::cat({state, expert_act}, state.dim() - 1)));
 
@@ -178,7 +189,7 @@ void HighLevelDecision::train(std::vector<PackedData>& data){
 
             d_optim.step();
 
-            actor_optim.zero_grad();
+
             critic_optim.zero_grad();
 
             torch::Tensor actor_prob2 = torch::sigmoid(discriminator.forward(
@@ -198,13 +209,18 @@ void HighLevelDecision::train(std::vector<PackedData>& data){
             torch::Tensor actor_log_probs = torch::log(torch::sum(actor_action_prob * actor_one_hot, 1));
             torch::Tensor actor_loss = -actor_log_probs * adv;
             actor_loss = actor_loss.mean();
+            */
+            actor_optim.zero_grad();
+            torch::Tensor actor_out = actor.forward(state);
 
-            torch::Tensor total_loss = actor_d_loss2 + actor_loss + critic_loss;
+            torch::Tensor actor_action_prob = torch::softmax(actor_out, 1);
+            //torch::Tensor total_loss = actor_d_loss2 + actor_loss + critic_loss;
+            torch::Tensor total_loss = torch::binary_cross_entropy(actor_action_prob, expert_act).mean();
             avg_total_loss += total_loss;
             total_loss.backward();
 
 
-            critic_optim.step();
+            //critic_optim.step();
             actor_optim.step();
         }
         catch (const std::runtime_error& e) {

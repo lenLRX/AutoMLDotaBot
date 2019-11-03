@@ -52,6 +52,7 @@ Units get_nearby_unit_by_type(const CMsgBotWorldState& state,
             ret.push_back(unit);
         }
     }
+    return ret;
 }
 
 Units get_nearby_unit(const CMsgBotWorldState& state,
@@ -69,6 +70,16 @@ Units filter_units_by_team(const Units& units, uint32_t team_id) {
     Units ret;
     for (const auto& unit:units) {
         if (unit.team_id() == team_id) {
+            ret.push_back(unit);
+        }
+    }
+    return ret;
+}
+
+Units filter_units_by_type(const Units& units, CMsgBotWorldState_UnitType type) {
+    Units ret;
+    for (const auto& unit:units) {
+        if (unit.unit_type() == type) {
             ret.push_back(unit);
         }
     }
@@ -93,7 +104,7 @@ torch::Tensor state_encoding(const CMsgBotWorldState& state,
 
     const auto& hero_loc = hero.location();
 
-    torch::Tensor x = torch::ones({ 10 });
+    torch::Tensor x = torch::ones({ 12 });
 
     x[0] = hero_loc.x() / 7000;
     x[1] = hero_loc.y() / 7000;
@@ -101,6 +112,7 @@ torch::Tensor state_encoding(const CMsgBotWorldState& state,
     float ally_creep_dis = 0.0;
     float ally_tower_dis = 0.0;
     float enemy_creep_dis = 0.0;
+    float enemy_creep_hp = 0.0;
     float enemy_tower_dis = 0.0;
 
     auto nearby_unit = get_nearby_unit(state, hero, 2000);
@@ -108,6 +120,7 @@ torch::Tensor state_encoding(const CMsgBotWorldState& state,
     for (const auto& s : nearby_unit) {
         int start_idx = -1;
         float dis = get_unit_distance(hero, s);
+        float hp = s.health();
         if (s.unit_type() == CMsgBotWorldState_UnitType_LANE_CREEP) {
             if (s.team_id() == hero.team_id()) {
                 if (ally_creep_dis == 0 || dis < ally_creep_dis) {
@@ -116,9 +129,17 @@ torch::Tensor state_encoding(const CMsgBotWorldState& state,
                 }
             }
             else {
+                /*
                 if (enemy_creep_dis == 0 || dis < enemy_creep_dis) {
                     enemy_creep_dis = dis;
                     start_idx = 4;
+                }
+                */
+                if (enemy_creep_hp == 0 || hp < enemy_creep_hp) {
+                    enemy_creep_hp = hp;
+                    start_idx = 4;
+                    x[10] = hp;
+                    x[11] = hero.attack_damage();
                 }
             }
         }
@@ -152,6 +173,26 @@ Units filter_attackable_units(const Units &units) {
                 !unit.is_attack_immune()
                 && unit.is_alive()) {
             ret.push_back(unit);
+        }
+    }
+    return ret;
+}
+
+CMsgBotWorldState_Unit get_nearest_unit(const Units& units, const CMsgBotWorldState_Unit& target) {
+    if (units.empty()) {
+        throw std::runtime_error("got empty units vector");
+    }
+    float min_dist = 10000.f;
+    CMsgBotWorldState_Unit ret;
+    float target_x = target.location().x();
+    float target_y = target.location().y();
+    for (const auto& unit:units) {
+        float dx = unit.location().x() - target_x;
+        float dy = unit.location().y() - target_y;
+        float d = sqrtf(dx*dx + dy*dy);
+        if (d < min_dist) {
+            ret = unit;
+            min_dist = d;
         }
     }
     return ret;

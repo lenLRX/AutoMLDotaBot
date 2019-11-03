@@ -47,6 +47,7 @@ public:
 private:
     float d_factor;
     uint32_t prev_last_hit;
+    uint32_t prev_health;
     std::vector<float> rewards;
     float last_reward;
     ReplayBuffer replay_buffer;

@@ -6,7 +6,7 @@
 NS_NN_BEGIN
 
 const static int input_shape = 4;
-const static int hidden_shape = 128;
+const static int hidden_shape = 256;
 const static int output_shape = 1;
 
 AttackLayer::AttackLayer():atk_handle(-1) {
@@ -29,6 +29,18 @@ static torch::Tensor creep_encoding(const CMsgBotWorldState_Unit& h,
 }
 
 
+#define SAVE_EXPERT_ACTION() for (const auto& creep:enemy_creeps) { \
+        if (creep.health() < hero_atk * 1.5) {\
+            selected = i;\
+            expert_action_cache.push_back(1);\
+        }\
+        else {\
+            expert_action_cache.push_back(0);\
+        }\
+            ++i;\
+    }
+
+
 std::shared_ptr<Layer> AttackLayer::forward_impl(const LayerForwardConfig &cfg) {
     const CMsgBotWorldState_Unit& hero = dotautil::get_hero(cfg.state,
             cfg.team_id, cfg.player_id);
@@ -36,7 +48,7 @@ std::shared_ptr<Layer> AttackLayer::forward_impl(const LayerForwardConfig &cfg) 
     const auto& location = hero.location();
 
     std::vector<torch::Tensor> states_cache;
-    std::vector<torch::Tensor> expert_action_cache;
+    std::vector<int> expert_action_cache;
     std::vector<torch::Tensor> actor_action_cache;
 
     auto nearby_units = dotautil::get_nearby_unit(cfg.state, hero, 2000);
@@ -45,6 +57,8 @@ std::shared_ptr<Layer> AttackLayer::forward_impl(const LayerForwardConfig &cfg) 
 
     auto enemy_creeps = dotautil::filter_units_by_team(nearby_units, opposed_team);
     enemy_creeps = dotautil::filter_attackable_units(enemy_creeps);
+
+    int hero_atk = hero.attack_damage();
 
     float max_value = 0.0;
     int idx = -1;
@@ -71,7 +85,17 @@ std::shared_ptr<Layer> AttackLayer::forward_impl(const LayerForwardConfig &cfg) 
         throw std::exception();
     }
 
+    i = 0;
+    int selected = -1;
+    SAVE_EXPERT_ACTION();
 
+    if (selected < 0) {
+        selected = 0;
+    }
+
+    actual_action_idx.push_back(idx);
+    actual_expert_act.push_back(idx == expert_action_cache[idx]);
+    actual_state.push_back(creep_encoding(hero, enemy_creeps[idx]));
 
     atk_handle = enemy_creeps.at(idx).handle();
     return std::shared_ptr<Layer>();
@@ -96,23 +120,15 @@ std::shared_ptr<Layer> AttackLayer::forward_expert(const LayerForwardConfig &cfg
     int i = 0;
     int selected = -1;
 
-    for (const auto& creep:enemy_creeps) {
-        if (creep.health() < hero_atk * 1.2) {
-            atk_handle = creep.handle();
-            selected = i;
-            expert_action.push_back(1);
-        }
-        else {
-            expert_action.push_back(0);
-        }
-        ++i;
+    std::vector<int> expert_action_cache;
+
+    SAVE_EXPERT_ACTION();
+
+    if (selected < 0) {
+        selected = 0;
     }
 
-    if (atk_handle < 0) {
-        selected = i;
-        atk_handle = enemy_creeps[0].handle();
-
-    }
+    atk_handle = enemy_creeps[selected].handle();
 
     actual_action_idx.push_back(selected);
     actual_expert_act.push_back(1);
@@ -166,7 +182,7 @@ AttackLayer::PackedData AttackLayer::get_training_data() {
         return ret;
     }
     ret["state"] = torch::stack(states).to(torch::kCUDA);
-    ret["expert_action"] = dotautil::vector2tensor(expert_action).to(torch::kCUDA);
+    //ret["expert_action"] = dotautil::vector2tensor(expert_action).to(torch::kCUDA);
     ret["expert_actual_act"] = dotautil::vector2tensor(actual_expert_act).to(torch::kCUDA);
     ret["actual_state"] = torch::stack(actual_state).to(torch::kCUDA);
     return ret;
@@ -212,16 +228,17 @@ void AttackLayer::train(std::vector<PackedData>& data){
 
         torch::Tensor state = p_data.at("state").to(dev);
         torch::Tensor actual_state_ = p_data.at("actual_state").to(dev);
-        torch::Tensor expert_act = p_data.at("expert_action").view({-1, 1}).to(dev);
+        //torch::Tensor expert_act = p_data.at("expert_action").view({-1, 1}).to(dev);
         torch::Tensor expert_actual_act_ = p_data.at("expert_actual_act").view({-1, 1}).to(dev);
         torch::Tensor reward = p_data.at("reward").to(dev);
 
+        /*
         torch::Tensor expert_prob = torch::sigmoid(discriminator.forward(
                 torch::cat({ state, expert_act }, state.dim() - 1)));
         torch::Tensor expert_label = torch::ones_like(expert_prob);
         torch::Tensor expert_d_loss = torch::binary_cross_entropy(expert_prob, expert_label).mean();
 
-        torch::Tensor actor_action_prob = torch::softmax(actor.forward(state), 1);
+        torch::Tensor actor_action_prob = torch::sigmoid(actor.forward(state));
         torch::Tensor actor_prob = torch::sigmoid(discriminator.forward(
                 torch::cat({state, actor_action_prob.detach()}, state.dim() - 1)));
         torch::Tensor actor_label = torch::zeros_like(actor_prob);
@@ -230,12 +247,11 @@ void AttackLayer::train(std::vector<PackedData>& data){
         torch::Tensor prob_diff = torch::relu(expert_prob - actor_prob).detach();
 
         torch::Tensor total_d_loss = expert_d_loss + actor_d_loss;
-
         total_d_loss.backward();
 
         d_optim.step();
 
-        actor_optim.zero_grad();
+
         critic_optim.zero_grad();
 
         torch::Tensor actor_actual_action_prob = torch::softmax(actor.forward(actual_state_), 1);
@@ -256,12 +272,18 @@ void AttackLayer::train(std::vector<PackedData>& data){
         torch::Tensor actor_log_probs = torch::log(torch::sum(actor_actual_action_prob, 1));
         torch::Tensor actor_loss = -actor_log_probs * adv;
         actor_loss = actor_loss.mean();
+        */
 
-        torch::Tensor total_loss = actor_d_loss2 + actor_loss + critic_loss;
+        actor_optim.zero_grad();
+        torch::Tensor actor_actual_action_ = sigmoid(actor.forward(actual_state_));
+        //torch::Tensor total_loss = actor_d_loss2;//TODO FIX actor critic loss + actor_loss + critic_loss;
+        torch::Tensor total_loss = actor_actual_action_ - expert_actual_act_;
+        total_loss = total_loss * total_loss;
+        total_loss = total_loss.mean();
         avg_total_loss += total_loss;
         total_loss.backward();
 
-        critic_optim.step();
+        //critic_optim.step();
         actor_optim.step();
     }
 
@@ -273,7 +295,6 @@ void AttackLayer::train(std::vector<PackedData>& data){
 void AttackLayer::reset_custom() {
     atk_handle = -1;
     state_len.clear();
-    expert_action.clear();
     actual_action_idx.clear();
     tick_offset.clear();
     actual_state.clear();

@@ -34,6 +34,8 @@ private:
     std::vector<torch::Tensor> expert_action;
     std::vector<torch::Tensor> move_action;
     std::pair<float, float> target_pos;
+    float dist;
+    float z;
 };
 
 NS_NN_END

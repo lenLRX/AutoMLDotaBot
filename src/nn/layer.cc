@@ -24,7 +24,8 @@ torch::Tensor Layer::get_masked_reward(const std::vector<float>& reward) {
     return ret;
 }
 
-void Layer::update_params(const Layer& other) {
+void Layer::update_params(Layer& other) {
+    std::lock_guard<std::mutex> g(other.mtx);
     for (const auto& p_other: other.networks) {
         auto& p_net = networks.at(p_other.first);
         std::shared_ptr<Dense> cloned = std::dynamic_pointer_cast<Dense>(p_other.second->get<Dense>()->clone());

@@ -37,7 +37,6 @@ private:
 
     // length of each tick states
     std::vector<int> state_len;
-    std::vector<int> expert_action;
     std::vector<int> actual_action_idx;
     std::vector<int> tick_offset;
     std::vector<torch::Tensor> actual_state;
