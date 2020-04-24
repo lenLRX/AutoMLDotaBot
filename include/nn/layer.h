@@ -34,7 +34,7 @@ public:
     bool expert_action;
 };
 
-class Layer: std::enable_shared_from_this<Layer> {
+class Layer: public std::enable_shared_from_this<Layer> {
 public:
 
     virtual ~Layer() {}
@@ -82,6 +82,7 @@ public:
 
     std::vector<torch::Tensor> states;
     std::vector<int> ticks;
+    bool expert_mode{false};
     std::mutex mtx;
 };
 

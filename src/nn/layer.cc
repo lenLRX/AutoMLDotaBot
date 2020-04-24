@@ -28,10 +28,9 @@ void Layer::update_params(Layer& other) {
     std::lock_guard<std::mutex> g(other.mtx);
     for (const auto& p_other: other.networks) {
         auto& p_net = networks.at(p_other.first);
-        std::shared_ptr<Dense> cloned = std::dynamic_pointer_cast<Dense>(p_other.second->get<Dense>()->clone());
-        p_net = std::make_shared<TorchLayer>(cloned);
-        p_net->get<Dense>()->eval();
-        p_net->get<Dense>()->to(torch::kCPU);
+        p_net = p_other.second->clone();
+        p_net->eval();
+        p_net->to(torch::kCPU);
         //cloned->to(torch::kCPU);
     }
 }
@@ -40,6 +39,7 @@ void Layer::reset() {
     std::cerr << std::this_thread::get_id() << " Layer " << get_name() << " reset " << std::endl;
     states.clear();
     ticks.clear();
+    expert_mode = false;
     reset_custom();
 
     for (auto c:children) {

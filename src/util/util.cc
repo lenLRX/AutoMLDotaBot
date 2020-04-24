@@ -97,6 +97,14 @@ uint32_t get_opposed_team(uint32_t team_id)
     throw std::exception();
 }
 
+int get_total_ability_level(const CMsgBotWorldState_Unit& hero) {
+    int total_level = 0;
+    for (const auto& ability:hero.abilities()) {
+        total_level += ability.level();
+    }
+    return total_level;
+}
+
 
 torch::Tensor state_encoding(const CMsgBotWorldState& state,
         DOTA_TEAM team_id, int player_id) {
@@ -104,7 +112,7 @@ torch::Tensor state_encoding(const CMsgBotWorldState& state,
 
     const auto& hero_loc = hero.location();
 
-    torch::Tensor x = torch::ones({ 12 });
+    torch::Tensor x = torch::ones({ hero_state_size });
 
     x[0] = hero_loc.x() / 7000;
     x[1] = hero_loc.y() / 7000;
@@ -163,6 +171,9 @@ torch::Tensor state_encoding(const CMsgBotWorldState& state,
             x[start_idx + 1] = (loc.y() - hero_loc.y()) / near_by_scale;
         }
     }
+    int total_ability_level = dotautil::get_total_ability_level(hero);
+    x[12] = (int)hero.level();
+    x[13] = total_ability_level;
     return x;
 }
 
@@ -196,6 +207,245 @@ CMsgBotWorldState_Unit get_nearest_unit(const Units& units, const CMsgBotWorldSt
         }
     }
     return ret;
+}
+
+
+AbilityManager& AbilityManager::get_instance() {
+    static AbilityManager instance;
+    return instance;
+}
+
+int AbilityManager::get_id_by_name(const char* name){
+    std::string id = data["DOTAAbilities"][name]["ID"];
+    return atoi(id.c_str());
+}
+
+
+void AbilityManager::set_data(const nlohmann::json& new_data) {
+    data = new_data;
+}
+
+
+void encode_single_unit(const CMsgBotWorldState_Unit& unit, torch::Tensor& tensor, int start_idx) {
+    auto add_field = [&tensor] (float value, int& i) {
+        tensor[i] = value;
+        ++i;
+    };
+
+    int idx = start_idx;
+    const auto& loc = unit.location();
+    add_field(loc.x(), idx);
+    add_field(loc.y(), idx);
+
+
+    assert(start_idx - idx <= max_unit_field);
+}
+
+void StateManager::set_player_id(int id) {
+    player_id_ = id;
+}
+
+void StateManager::update(const CMsgBotWorldState& state) {
+    torch::Tensor ally_creep_state = torch::zeros({max_unit_num, max_unit_field});
+    torch::Tensor enemy_creep_state = torch::zeros({max_unit_num, max_unit_field});
+    const CMsgBotWorldState_Unit& self = get_hero(state, team_id_, player_id_);
+    int ally_idx = 0;
+    int enemy_idx = 0;
+    for (const auto& unit:state.units()) {
+        if (unit.team_id() == team_id_) {
+            torch::Tensor single_unit = ally_creep_state[ally_idx];
+            update_unit(single_unit, unit, self);
+            ++ally_idx;
+            if (ally_idx >= max_unit_num) {
+                continue;
+            }
+        } else {
+            torch::Tensor single_unit = enemy_creep_state[enemy_idx];
+            update_unit(single_unit, unit, self);
+            ++enemy_idx;
+            enemy_handle_.push_back(unit.handle());
+            if (enemy_idx >= max_unit_num) {
+                continue;
+            }
+        }
+    }
+    ally_unit_states_.push_back(ally_creep_state);
+    enemy_unit_states_.push_back(enemy_creep_state);
+    hero_states_.push_back(update_hero(self));
+}
+
+torch::Tensor StateManager::get_ally_unit_state() {
+    assert(!ally_unit_states_.empty());
+    return ally_unit_states_.back();
+}
+
+torch::Tensor StateManager::get_enemy_unit_state() {
+    assert(!enemy_unit_states_.empty());
+    return enemy_unit_states_.back();
+}
+
+std::vector<int> StateManager::get_enemy_handle() {
+    return enemy_handle_;
+}
+
+torch::Tensor StateManager::get_hero_state() {
+    assert(!hero_states_.empty());
+    return hero_states_.back();
+}
+
+void StateManager::update_unit(torch::Tensor& t, const CMsgBotWorldState_Unit& state,
+                               const CMsgBotWorldState_Unit& self) {
+    int i = 0;
+    update_location(state, t, i);
+    update_facing_angle(state, t, i);
+    update_hp(state, t, i);
+
+    const float attack_scale = 100;
+    t[i] = state.attack_damage() / attack_scale;
+    ++i;
+
+    update_armor(state, t, i);
+
+    const float move_speed_scale = 500;
+    t[i] = state.current_movement_speed() / move_speed_scale;
+    ++i;
+
+    // is my team?
+    t[i] = state.team_id() == team_id_;
+    ++i;
+
+    update_vector_to_me(state, self, t, i);
+
+    // am i attacking unit?
+    t[i] = self.attack_target_handle() == state.handle();
+    ++i;
+
+    // is unit attacking me?
+    t[i] = state.attack_target_handle() == self.handle();
+    ++i;
+
+    // unit type is creep?
+    t[i] = state.unit_type() == CMsgBotWorldState_UnitType_LANE_CREEP;
+    ++i;
+
+    // unit type is Tower?
+    t[i] = state.unit_type() == CMsgBotWorldState_UnitType_TOWER;
+    ++i;
+    assert(i == max_unit_field);
+}
+
+torch::Tensor StateManager::update_hero(const CMsgBotWorldState_Unit& self) {
+    torch::Tensor ret = torch::zeros({max_unit_field});
+    int i = 0;
+    update_location(self, ret, i);
+    update_facing_angle(self, ret, i);
+    update_hp(self, ret, i);
+
+    const float attack_scale = 100;
+    ret[i] = self.attack_damage() / attack_scale;
+    ++i;
+
+    update_armor(self, ret, i);
+
+    const float move_speed_scale = 500;
+    ret[i] = self.current_movement_speed() / move_speed_scale;
+    ++i;
+
+    // is my team?
+    ret[i] = self.team_id() == team_id_;
+    ++i;
+
+    // padding 3 zero
+    i += 7;
+
+    assert(i == max_unit_field);
+    return ret;
+}
+
+void StateManager::update_location(const CMsgBotWorldState_Unit& unit, torch::Tensor& t, int& i) {
+    float scale_factor = 7000;
+    const auto& loc = unit.location();
+    t[i] = loc.x() / scale_factor;
+    ++i;
+    t[i] = loc.y() / scale_factor;
+    ++i;
+}
+
+void StateManager::update_facing_angle(const CMsgBotWorldState_Unit& unit, torch::Tensor& t, int& i) {
+    // unit.facing is [0,360] int
+    float rad = static_cast<float>(unit.facing()) / 180.f * M_PI;
+    t[i] = std::cos(rad);
+    ++i;
+    t[i] = std::sin(rad);
+    ++i;
+}
+
+void StateManager::update_hp(const CMsgBotWorldState_Unit& unit, torch::Tensor& t, int& i) {
+    const int history_len = 16;
+    const float hp_scale_factor = 1000;
+    auto handle = unit.handle();
+    std::deque<float>& hp_vec = hp_buffer_[handle];
+    if (hp_vec.empty()) {
+        for (int n = 0;n < history_len;++n) {
+            hp_vec.push_back(0);
+        }
+    }
+
+    hp_vec.push_back(unit.health() / hp_scale_factor);
+    hp_vec.pop_front();
+    assert(hp_vec.size() == history_len);
+    for (float hp : hp_vec) {
+        t[i] = hp;
+        ++i;
+    }
+
+    t[i] = unit.health_max() / hp_scale_factor;
+    ++i;
+}
+
+void StateManager::update_armor(const CMsgBotWorldState_Unit& unit, torch::Tensor& t, int& i) {
+    float armor = unit.armor();
+    float damage_multiplier = 1 - ((0.052 * armor) / (0.9 + 0.048 * std::abs(armor)));
+    t[i] = damage_multiplier;
+    ++i;
+}
+
+void StateManager::update_vector_to_me(const CMsgBotWorldState_Unit& unit, const CMsgBotWorldState_Unit& me,
+                         torch::Tensor& t, int& i) {
+    float scale_factor = 7000;
+    const auto& my_loc = me.location();
+    const auto& unit_loc = unit.location();
+    float dx = unit_loc.x() - my_loc.x();
+    dx /= scale_factor;
+    float dy = unit_loc.y() - my_loc.y();
+    dy /= scale_factor;
+    t[i] = dx;
+    ++i;
+    t[i] = dy;
+    ++i;
+
+    float distance = std::sqrt(dx * dx + dy * dy);
+    t[i] = distance;
+    ++i;
+}
+
+
+// should be called after update state
+void StateManager::update_reward(const CMsgBotWorldState& state) {
+    if (hero_states_.size() <= 1) {
+        return;
+    }
+    int state_num = hero_states_.size();
+    torch::Tensor current_tensor = hero_states_[state_num-1];
+    torch::Tensor prev_tensor = hero_states_[state_num-2];
+
+    float current_dis_to_mid = std::sqrt(to_number<float>(current_tensor[0] * current_tensor[0]
+            + current_tensor[1] * current_tensor[1]));
+
+    float prev_dis_to_mid = std::sqrt(to_number<float>(prev_tensor[0] * prev_tensor[0]
+                                                              + prev_tensor[1] * prev_tensor[1]));
+    // dis range 0 to 1
+    float dist_reward = (prev_dis_to_mid - current_dis_to_mid) * 1E-3f;
 }
 
 NS_UTIL_END

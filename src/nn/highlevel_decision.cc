@@ -6,33 +6,38 @@
 NS_NN_BEGIN
 
 
-const static int input_shape = 12;
+const static int input_shape = hero_state_size;
 const static int hidden_shape = 256;
-const static int output_shape = 2;
+const static int output_shape = 3;
 
 
 HighLevelDecision::HighLevelDecision() {
-    networks["actor"] = std::make_shared<TorchLayer>(std::make_shared<Dense>(input_shape, hidden_shape, output_shape));
-    networks["critic"] = std::make_shared<TorchLayer>(std::make_shared<Dense>(input_shape, hidden_shape, 1));
-    networks["discriminator"] = std::make_shared<TorchLayer>(std::make_shared<Dense>(input_shape + output_shape, hidden_shape, 1));
+    networks["actor"] = std::dynamic_pointer_cast<TorchLayer>(std::make_shared<Dense>(input_shape, hidden_shape, output_shape));
+    networks["critic"] = std::dynamic_pointer_cast<TorchLayer>(std::make_shared<Dense>(input_shape, hidden_shape, 1));
+    networks["discriminator"] = std::dynamic_pointer_cast<TorchLayer>(std::make_shared<Dense>(input_shape + output_shape, hidden_shape, 1));
 }
 
-#define SAVE_EXPERT_ACTION() for (const auto& creep:nearby_enemy) {\
+#define SAVE_EXPERT_ACTION() do {\
+                            if (hero.level() > dotautil::get_total_ability_level(hero))\
+                            {\
+                                expert_idx = 2;\
+                                break;\
+                            }\
+                            for (const auto& creep:nearby_enemy) {\
                                 if (creep.health() < hero_atk * 1.5) {\
                                     expert_idx = 1;\
                                 }\
-                            }
+                            }\
+                            } while(0);\
 
 std::shared_ptr<Layer> HighLevelDecision::forward_impl(const LayerForwardConfig &cfg) {
     CMsgBotWorldState_Unit hero = dotautil::get_hero(cfg.state, cfg.team_id, cfg.player_id);
 
-    const auto& location = hero.location();
     torch::Tensor x = dotautil::state_encoding(cfg.state, cfg.team_id, cfg.player_id);
 
     auto out = networks.at("actor")->get<Dense>()->forward(x);
 
     auto action_prob = torch::softmax(out, 0);
-    float max_prob = dotautil::to_number<float>(torch::max(action_prob));
     auto action = torch::argmax(action_prob);
 
     //auto action = action_prob.multinomial(1);
@@ -52,11 +57,11 @@ std::shared_ptr<Layer> HighLevelDecision::forward_impl(const LayerForwardConfig 
     int expert_idx = 0;
     SAVE_EXPERT_ACTION();
 
-    torch::Tensor expert = torch::zeros({2});
+    torch::Tensor expert = torch::zeros({output_shape});
     expert[expert_idx] = 1;
     expert_action.push_back(expert);
 
-    torch::Tensor act = torch::zeros({2});
+    torch::Tensor act = torch::zeros({output_shape});
     act[idx] = 1;
     one_hot_action.push_back(act);
 
@@ -79,11 +84,11 @@ std::shared_ptr<Layer> HighLevelDecision::forward_expert(const LayerForwardConfi
     nearby_enemy = dotautil::filter_attackable_units(nearby_enemy);
     SAVE_EXPERT_ACTION();
 
-    torch::Tensor expert = torch::zeros({2});
+    torch::Tensor expert = torch::zeros({output_shape});
     expert[expert_idx] = 1;
     expert_action.push_back(expert);
 
-    torch::Tensor act = torch::zeros({2});
+    torch::Tensor act = torch::zeros({output_shape});
     act[expert_idx] = 1;
     one_hot_action.push_back(act);
 
@@ -118,6 +123,7 @@ HighLevelDecision::PackedData HighLevelDecision::get_training_data(){
 }
 
 void HighLevelDecision::train(std::vector<PackedData>& data){
+    std::lock_guard<std::mutex> g(mtx);
     auto& actor = *networks["actor"]->get<Dense>();
     auto& critic = *networks["critic"]->get<Dense>();
     auto& discriminator = *networks["discriminator"]->get<Dense>();
@@ -152,7 +158,6 @@ void HighLevelDecision::train(std::vector<PackedData>& data){
             if (p_data.count("state") == 0) {
                 continue;
             }
-
             active_data_num++;
 
             torch::Tensor state = p_data.at("state").to(dev);
@@ -161,55 +166,6 @@ void HighLevelDecision::train(std::vector<PackedData>& data){
 
             torch::Tensor actor_one_hot = p_data.at("actor_one_hot").to(dev);// use real action
 
-            torch::Tensor reward = p_data.at("reward").to(dev);
-
-            /*
-            torch::Tensor expert_prob = torch::sigmoid(discriminator.forward(
-                    torch::cat({state, expert_act}, state.dim() - 1)));
-
-            torch::Tensor expert_label = torch::ones_like(expert_prob);
-            torch::Tensor expert_d_loss = torch::binary_cross_entropy(expert_prob, expert_label).mean();
-
-            torch::Tensor actor_out = actor.forward(state);
-
-            torch::Tensor actor_action_prob = torch::softmax(actor_out, 1);
-
-            torch::Tensor actor_prob = torch::sigmoid(discriminator.forward(
-                    torch::cat({state, (actor_action_prob * actor_one_hot).detach()}, state.dim() - 1)));
-
-            torch::Tensor actor_label = torch::zeros_like(actor_prob);
-
-            torch::Tensor actor_d_loss = torch::binary_cross_entropy(actor_prob, actor_label).mean();
-
-            torch::Tensor prob_diff = torch::relu(expert_prob - actor_prob).detach();
-
-            torch::Tensor total_d_loss = expert_d_loss + actor_d_loss;
-
-            total_d_loss.backward();
-
-            d_optim.step();
-
-
-            critic_optim.zero_grad();
-
-            torch::Tensor actor_prob2 = torch::sigmoid(discriminator.forward(
-                    torch::cat({state, actor_action_prob * expert_act}, state.dim() - 1)));
-            torch::Tensor actor_label2 = torch::ones_like(actor_prob2);
-
-            torch::Tensor actor_d_loss2 =
-                    (torch::relu(torch::binary_cross_entropy(actor_prob2, actor_label2) - 0.1)) * prob_diff.mean();
-
-            torch::Tensor values = critic.forward(state).squeeze();
-            torch::Tensor critic_loss = reward - values;
-            critic_loss = critic_loss * critic_loss;
-            critic_loss = critic_loss.mean();
-
-            torch::Tensor adv = reward - values.detach();
-
-            torch::Tensor actor_log_probs = torch::log(torch::sum(actor_action_prob * actor_one_hot, 1));
-            torch::Tensor actor_loss = -actor_log_probs * adv;
-            actor_loss = actor_loss.mean();
-            */
             actor_optim.zero_grad();
             torch::Tensor actor_out = actor.forward(state);
 

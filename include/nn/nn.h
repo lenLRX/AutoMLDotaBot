@@ -5,8 +5,11 @@
 #ifndef AUTOMLDOTABOT_NN_H
 #define AUTOMLDOTABOT_NN_H
 
+#include <functional>
+
 #include "util/util.h"
 #include "layer.h"
+#include "openai_five/network.h"
 
 NS_NN_BEGIN
 
@@ -18,6 +21,21 @@ public:
     std::map<std::string, Layer::PackedData> buffer;
 };
 
+class RewardRecord {
+public:
+    explicit RewardRecord(float d) :
+        discount_factor(d),
+        last_reward(0) {
+    }
+    float discount_factor;
+    std::vector<float> rewards;
+    float last_reward;
+    void reset() {
+        rewards.clear();
+        last_reward = 0;
+    }
+};
+
 //
 // a Net class contains the tree of the layers
 //
@@ -25,7 +43,7 @@ public:
 class Net {
 public:
 
-    explicit Net(float discount_factor);
+    Net();
 
     CMsgBotWorldState_Action forward(const CMsgBotWorldState& state,
             DOTA_TEAM team_id, int player_id, int tick, bool expert_action);
@@ -34,7 +52,7 @@ public:
 
     const ReplayBuffer& get_replay_buffer();
 
-    std::vector<float> get_discounted_reward();
+    std::vector<float> get_discounted_reward(RewardRecord& reward);
 
     void update_param(const Net& other);
 
@@ -45,11 +63,10 @@ public:
     void reset();
 
 private:
-    float d_factor;
     uint32_t prev_last_hit;
     uint32_t prev_health;
-    std::vector<float> rewards;
-    float last_reward;
+    std::unordered_map<std::string, RewardRecord> reward_map;
+    std::unordered_map<std::string, std::function<float(const LayerForwardConfig&)>> reward_fn_map;
     ReplayBuffer replay_buffer;
     Layer::Ptr root;
 };

@@ -12,7 +12,7 @@
 
 #include "dotaservice/protos/DotaService.grpc.pb.h"
 #include "dotaservice/protos/DotaService.pb.h"
-
+#include "openai_five/network.h"
 
 NS_DOTACLIENT_BEGIN
 
@@ -67,6 +67,9 @@ private:
     int tick;
     uint32_t radiant_player_id;
     uint32_t dire_player_id;
+
+    Network::Ptr rad_open_ai_net;
+    Network::Ptr dire_open_ai_net;
 
     Status game_status;
 };

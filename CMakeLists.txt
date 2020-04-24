@@ -191,7 +191,7 @@ file(GLOB_RECURSE BOT_SOURCES RELATIVE ${CMAKE_SOURCE_DIR} "src/*.cc")
 file(GLOB_RECURSE INTERNAL_HEADERS RELATIVE ${CMAKE_SOURCE_DIR} "src/*.h")
 file(GLOB_RECURSE GLOBAL_HEADERS RELATIVE ${CMAKE_SOURCE_DIR} "include/*.h")
 
-add_executable(solo_bot ${BOT_SOURCES} ${INTERNAL_HEADERS} ${GLOBAL_HEADERS} src/nn/nn.cc include/nn/move_layer.h src/nn/move_layer.cc src/nn/attack_layer.cc src/nn/attack_layer.cc)
+add_executable(solo_bot ${BOT_SOURCES} ${INTERNAL_HEADERS} ${GLOBAL_HEADERS} src/nn/nn.cc include/nn/move_layer.h src/nn/move_layer.cc src/nn/attack_layer.cc src/nn/attack_layer.cc src/util/default_ability_attr.cc include/nn/ability_tree_layer.h src/nn/ability_tree_layer.cc src/nn/torch_layer.cc include/openai_five/network.h src/openai_five/network.cc)
 target_link_libraries(solo_bot
         ${_GRPC_GRPCPP_LIBRARY}
         ${TORCH_CUDA_LIBRARIES}

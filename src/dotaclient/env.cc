@@ -26,7 +26,7 @@ void DotaEnv::init() {
 
 
 std::shared_ptr<nn::Net> DotaEnv::init_net() {
-    return std::make_shared<nn::Net>(0.7);
+    return std::make_shared<nn::Net>();
 }
 
 bool DotaEnv::game_running() {
@@ -112,6 +112,11 @@ void DotaEnv::reset() {
         }
     }
 
+    rad_open_ai_net = std::make_shared<Network>(radiant_player_id, DOTA_TEAM_RADIANT);
+    dire_open_ai_net = std::make_shared<Network>(dire_player_id, DOTA_TEAM_DIRE);
+    rad_open_ai_net->reset();
+    dire_open_ai_net->reset();
+
     send_action(TEAM_RADIANT);
     send_action(TEAM_DIRE);
 
@@ -153,6 +158,8 @@ void DotaEnv::step() {
                                                DOTA_TEAM_RADIANT, radiant_player_id, tick, expert_action);
         rad_action.set_player(radiant_player_id);
         radiant_action->mutable_actions()->mutable_actions()->Add(std::move(rad_action));
+        rad_open_ai_net->set_player_id(radiant_player_id);
+        rad_open_ai_net->forward(*get_state(TEAM_RADIANT));
     }
     else {
         auto rad_noop = dotautil::no_op(radiant_player_id);
@@ -171,6 +178,8 @@ void DotaEnv::step() {
                                           DOTA_TEAM_DIRE, dire_player_id, tick, expert_action);
         d_action.set_player(dire_player_id);
         dire_action->mutable_actions()->mutable_actions()->Add(std::move(d_action));
+        dire_open_ai_net->set_player_id(dire_player_id);
+        dire_open_ai_net->forward(*get_state(TEAM_DIRE));
     }
     else {
         auto dire_noop = dotautil::no_op(dire_player_id);
@@ -212,6 +221,9 @@ nn::ReplayBuffer DotaEnv::get_replay_buffer(Team team) {
     else if (team == TEAM_DIRE) {
         dire_net->collect_training_data();
         return dire_net->get_replay_buffer();
+    }
+    else {
+        throw std::runtime_error("unknown team");
     }
 }
 

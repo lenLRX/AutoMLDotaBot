@@ -31,6 +31,9 @@ public:
 
 private:
     void save_state(const LayerForwardConfig &cfg);
+    std::deque<torch::Tensor> state_buffer;
+    std::deque<torch::Tensor> expert_action_buffer;
+    std::deque<torch::Tensor> move_action_buffer;
     std::vector<torch::Tensor> expert_action;
     std::vector<torch::Tensor> move_action;
     std::pair<float, float> target_pos;

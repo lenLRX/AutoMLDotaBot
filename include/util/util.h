@@ -12,6 +12,7 @@
 
 #include <torch/torch.h>
 #include "spdlog/spdlog.h"
+#include "nlohmann/json.hpp"
 
 #define NS_DOTACLIENT_BEGIN namespace dotaservice {
 #define NS_DOTACLIENT_END }
@@ -27,6 +28,9 @@
 static const float lr = 1e-4;
 
 static const float near_by_scale = 2000;
+static const int hero_state_size = 16;
+
+static int n_step = 20;
 
 enum DOTA_TEAM {
     DOTA_TEAM_RADIANT = 2,
@@ -87,6 +91,60 @@ torch::Tensor vector2tensor(const std::vector<T>& vec) {
     return ret;
 }
 
+int get_total_ability_level(const CMsgBotWorldState_Unit& hero);
+
 torch::Tensor state_encoding(const CMsgBotWorldState& state, DOTA_TEAM team_id, int player_id);
+
+class AbilityManager {
+public:
+    static AbilityManager& get_instance();
+    int get_id_by_name(const char* name);
+    void set_data(const nlohmann::json& data);
+private:
+    AbilityManager() = default;
+    nlohmann::json data;
+};
+
+const static char* reward_hp_key = "reward_hp";
+const static char* reward_lasthit_key = "reward_lasthit";
+
+static int max_unit_num = 64;
+static int max_unit_field = 32;
+
+class StateManager
+{
+public:
+    explicit StateManager(int player_id, DOTA_TEAM team_id):
+        player_id_(player_id), team_id_(team_id) {}
+    void set_player_id(int id);
+    void update(const CMsgBotWorldState& state);
+    torch::Tensor get_ally_unit_state();
+    torch::Tensor get_enemy_unit_state();
+    std::vector<int> get_enemy_handle();
+    torch::Tensor get_hero_state();
+    int player_id_;
+    DOTA_TEAM team_id_;
+private:
+
+    void update_unit(torch::Tensor& t, const CMsgBotWorldState_Unit& state,
+                     const CMsgBotWorldState_Unit& self);
+    torch::Tensor update_hero(const CMsgBotWorldState_Unit& self);
+
+    void update_location(const CMsgBotWorldState_Unit& unit, torch::Tensor& t, int& i);
+    void update_facing_angle(const CMsgBotWorldState_Unit& unit, torch::Tensor& t, int& i);
+    void update_hp(const CMsgBotWorldState_Unit& unit, torch::Tensor& t, int& i);
+    void update_armor(const CMsgBotWorldState_Unit& unit, torch::Tensor& t, int& i);
+    void update_vector_to_me(const CMsgBotWorldState_Unit& unit, const CMsgBotWorldState_Unit& me,
+                             torch::Tensor& t, int& i);
+
+    void update_reward(const CMsgBotWorldState& state);
+
+    std::unordered_map<int, std::deque<float>> hp_buffer_;
+    std::vector<torch::Tensor> ally_unit_states_;
+    std::vector<torch::Tensor> enemy_unit_states_;
+    std::vector<int> enemy_handle_;
+    std::vector<torch::Tensor> hero_states_;
+    std::vector<float> rewards_;
+};
 
 NS_UTIL_END

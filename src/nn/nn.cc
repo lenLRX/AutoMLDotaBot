@@ -6,11 +6,12 @@
 #include "nn/highlevel_decision.h"
 #include "nn/attack_layer.h"
 #include "nn/move_layer.h"
+#include "nn/ability_tree_layer.h"
 
 NS_NN_BEGIN
 
-Net::Net(float discount_factor)
-        :d_factor(discount_factor), last_reward(0), prev_last_hit(0), prev_health(0) {
+Net::Net()
+        :prev_last_hit(0), prev_health(0) {
     auto root_ptr = new HighLevelDecision();
     root.reset(root_ptr);
     //TODO auto rename
@@ -21,23 +22,53 @@ Net::Net(float discount_factor)
     auto atk_layer = std::make_shared<AttackLayer>();
     atk_layer->set_name(atk_layer->get_type() + "1");
     root_ptr->children.push_back(std::static_pointer_cast<Layer>(atk_layer));
+    auto ability_layer = std::make_shared<AbilityTreeLayer>();
+    ability_layer->set_name(ability_layer->get_type() + "1");
+    root_ptr->children.push_back(std::static_pointer_cast<Layer>(ability_layer));
+
+    // set up discounting factor
+    reward_map.insert({dotautil::reward_hp_key, RewardRecord(0.999)});
+    reward_map.insert({dotautil::reward_lasthit_key, RewardRecord(0.999)});
+
+    //binding reward fn
+    auto health_reward = [this](const LayerForwardConfig& cfg)->float{
+        const CMsgBotWorldState_Unit& hero = dotautil::get_hero(cfg.state,
+                                                                cfg.team_id, cfg.player_id);
+        float hp_reward = 0;
+        float hp = hero.health();
+        if (hp < prev_health) {
+            hp_reward = -1;
+        }
+        prev_health = hp;
+        return hp_reward;
+    };
+    auto lasthit_reward = [this](const LayerForwardConfig& cfg)->float {
+        const CMsgBotWorldState_Unit& hero = dotautil::get_hero(cfg.state,
+                                                                cfg.team_id, cfg.player_id);
+        float lasthit = hero.last_hits();
+        float last_hit_inc = lasthit - prev_last_hit;
+        prev_last_hit = lasthit;
+        return last_hit_inc;
+    };
+    reward_fn_map[dotautil::reward_hp_key] = health_reward;
+    reward_fn_map[dotautil::reward_lasthit_key] = lasthit_reward;
 }
 
 CMsgBotWorldState_Action Net::forward(const CMsgBotWorldState& state,
         DOTA_TEAM team_id, int player_id, int tick, bool expert_action) {
     LayerForwardConfig cfg(state, team_id, player_id, tick, expert_action);
+
     auto last_layer = root->forward(cfg);
 
     const CMsgBotWorldState_Unit& hero = dotautil::get_hero(cfg.state,
                                                             cfg.team_id, cfg.player_id);
 
-    float reward = hero.last_hits() - prev_last_hit;
-    float hp_reward = 0;
-    if (hero.health() < prev_health) {
-        hp_reward = -1;
+    for (const auto&p : reward_fn_map) {
+        float reward_ = p.second(cfg);
+        auto& r = reward_map.at(p.first);
+        r.rewards.push_back(reward_);
+        r.last_reward = reward_;
     }
-
-    rewards.push_back(hp_reward);
 
     prev_health = hero.health();
 
@@ -45,42 +76,55 @@ CMsgBotWorldState_Action Net::forward(const CMsgBotWorldState& state,
 }
 
 void Net::padding_reward() {
-    rewards.push_back(0);
+    for (auto& p:reward_map){
+        p.second.rewards.push_back(0);
+    }
 }
 
 void Net::collect_training_data() {
-    auto discounted_rewards = get_discounted_reward();
+    std::map<std::string, std::vector<float>> m;
+    for (auto& p:reward_map) {
+        auto discounted_rewards = get_discounted_reward(p.second);
+        m[p.first] = discounted_rewards;
+    }
+
     auto pack_data = root->get_training_data();
-    pack_data["reward"] = root->get_masked_reward(discounted_rewards);
+    for (const auto&p :m){
+        pack_data[p.first] = root->get_masked_reward(p.second);
+    }
+
     replay_buffer[root->get_name()] = pack_data;
-    for (const auto& child : root->children) {
+    for (const auto &child : root->children) {
         auto child_pack_data = child->get_training_data();
-        child_pack_data["reward"] = child->get_masked_reward(discounted_rewards);
+        for (const auto&p :m) {
+            child_pack_data[p.first] = child->get_masked_reward(p.second);
+        }
         replay_buffer[child->get_name()] = child_pack_data;
     }
+
 }
 
 const ReplayBuffer& Net::get_replay_buffer() {
     return replay_buffer;
 }
 
-std::vector<float> Net::get_discounted_reward() {
+std::vector<float> Net::get_discounted_reward(RewardRecord& reward) {
     std::vector<float> ret;
 
-    rewards.push_back(last_reward);
+    auto& rewards = reward.rewards;
+    rewards.push_back(reward.last_reward);
 
     float total_reward = 0;
 
     float r = 0;// may be should be value
     for (auto rit = rewards.rbegin(); rit != rewards.rend(); ++rit) {
-        r = *rit + d_factor * r;
+        r = *rit + reward.discount_factor * r;
         if (r < -1) {
             r = -1;
         }
         ret.push_back(r);
         total_reward += *rit;
     }
-    std::cerr << "total reward: " << total_reward << std::endl;
     std::reverse(ret.begin(), ret.end());
     return ret;
 }
@@ -115,7 +159,9 @@ void Net::train(const std::vector<ReplayBuffer>& replays) {
 
 
 void Net::reset() {
-    last_reward = 0;
+    for (auto& p : reward_map) {
+        p.second.reset();
+    }
     root->reset();
 }
 

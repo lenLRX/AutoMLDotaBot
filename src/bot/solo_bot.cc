@@ -30,8 +30,8 @@ int main(int argc, char** argv) {
     auto exception_logger = spdlog::basic_logger_mt("exception_logger", "exception.log", true);
     auto trace_logger = spdlog::basic_logger_mt("trace_logger", "trace.log", true);
 
-    nn::Net rad_net(0.99);
-    nn::Net dire_net(0.99);
+    nn::Net rad_net;
+    nn::Net dire_net;
 
     nn::ReplayQueue rad_queue;
     nn::ReplayQueue dire_queue;
@@ -39,10 +39,10 @@ int main(int argc, char** argv) {
     std::vector<std::thread> workers;
 
     //short worker_num = 8;
-    short worker_num = 6;
+    short worker_num = 4;
     std::cerr << "start with " << worker_num << " workers" << std::endl;
     short base_port = 13337 + 1;
-    int max_game_time = 6000;
+    int max_game_time = 3000;
 
     for (short i = 0; i < worker_num; ++i) {
         workers.emplace_back(std::bind(runner_thread, "127.0.0.1",base_port + i, max_game_time,
@@ -91,12 +91,13 @@ void trainer_thread(nn::Net& rad_net,
                     nn::Net& dire_net,
                     nn::ReplayQueue* rad_queue,
                     nn::ReplayQueue* dire_queue) {
+    int buf_size = 4;
     while (true) {
         std::vector<nn::ReplayBuffer> rad_replays;
         std::vector<nn::ReplayBuffer> dire_replays;
 
-        rad_queue->get_last_buffer(rad_replays, 200);
-        dire_queue->get_last_buffer(dire_replays, 200);
+        rad_queue->get_last_buffer(rad_replays, buf_size);
+        dire_queue->get_last_buffer(dire_replays, buf_size);
 
         std::cerr << "trainner buffer size " << rad_replays.size() << std::endl;
         if (rad_replays.empty()) {

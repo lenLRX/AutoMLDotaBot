@@ -12,5 +12,9 @@ and steam must logged in
 
 when we enter \`jointeam spec\`
 
-TODO fix attack
-TODO thread safe update param
+TODO USE LSTM
+
+state embedding
+action
+unroll step?
+use expert data

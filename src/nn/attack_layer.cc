@@ -10,9 +10,9 @@ const static int hidden_shape = 256;
 const static int output_shape = 1;
 
 AttackLayer::AttackLayer():atk_handle(-1) {
-    networks["actor"] = std::make_shared<TorchLayer>(std::make_shared<Dense>(input_shape, hidden_shape, output_shape));
-    networks["critic"] = std::make_shared<TorchLayer>(std::make_shared<Dense>(input_shape, hidden_shape, 1));
-    networks["discriminator"] = std::make_shared<TorchLayer>(std::make_shared<Dense>(input_shape + output_shape, hidden_shape, 1));
+    networks["actor"] = std::dynamic_pointer_cast<TorchLayer>(std::make_shared<Dense>(input_shape, hidden_shape, output_shape));
+    networks["critic"] = std::dynamic_pointer_cast<TorchLayer>(std::make_shared<Dense>(input_shape + output_shape, hidden_shape, 1));
+    networks["discriminator"] = std::dynamic_pointer_cast<TorchLayer>(std::make_shared<Dense>(input_shape + output_shape, hidden_shape, 1));
 }
 
 
@@ -141,6 +141,7 @@ std::shared_ptr<Layer> AttackLayer::forward(const LayerForwardConfig &cfg) {
     tick_offset.push_back(states.size());
     save_state(cfg);
     if (cfg.expert_action) {
+        expert_mode = true;
         return forward_expert(cfg);
     }
     return forward_impl(cfg);
@@ -185,10 +186,14 @@ AttackLayer::PackedData AttackLayer::get_training_data() {
     //ret["expert_action"] = dotautil::vector2tensor(expert_action).to(torch::kCUDA);
     ret["expert_actual_act"] = dotautil::vector2tensor(actual_expert_act).to(torch::kCUDA);
     ret["actual_state"] = torch::stack(actual_state).to(torch::kCUDA);
+    if (expert_mode) {
+        ret["expert_mode"] = torch::Tensor();
+    }
     return ret;
 }
 
 void AttackLayer::train(std::vector<PackedData>& data){
+    std::lock_guard<std::mutex> g(mtx);
     auto& actor = *networks["actor"]->get<Dense>();
     auto& critic = *networks["critic"]->get<Dense>();
     auto& discriminator = *networks["discriminator"]->get<Dense>();
@@ -213,7 +218,22 @@ void AttackLayer::train(std::vector<PackedData>& data){
     auto logger = spdlog::get("loss_logger");
 
     auto avg_total_loss = torch::zeros({1});
+    auto avg_critic_loss = torch::zeros({1});
     int active_data_num = 0;
+
+    auto critic_training_fn = [](Dense& critic,
+                                 torch::Tensor& state_act,
+                                 torch::Tensor& reward,
+                                 torch::optim::SGD& optim) ->torch::Tensor{
+        optim.zero_grad();
+        torch::Tensor values = critic.forward(state_act).squeeze();
+        torch::Tensor critic_loss = reward - values;
+        critic_loss = critic_loss * critic_loss;
+        critic_loss = critic_loss.mean();
+        critic_loss.backward();
+        optim.step();
+        return critic_loss;
+    };
 
     for (const auto& p_data:data) {
         actor_optim.zero_grad();
@@ -230,60 +250,26 @@ void AttackLayer::train(std::vector<PackedData>& data){
         torch::Tensor actual_state_ = p_data.at("actual_state").to(dev);
         //torch::Tensor expert_act = p_data.at("expert_action").view({-1, 1}).to(dev);
         torch::Tensor expert_actual_act_ = p_data.at("expert_actual_act").view({-1, 1}).to(dev);
-        torch::Tensor reward = p_data.at("reward").to(dev);
-
-        /*
-        torch::Tensor expert_prob = torch::sigmoid(discriminator.forward(
-                torch::cat({ state, expert_act }, state.dim() - 1)));
-        torch::Tensor expert_label = torch::ones_like(expert_prob);
-        torch::Tensor expert_d_loss = torch::binary_cross_entropy(expert_prob, expert_label).mean();
-
-        torch::Tensor actor_action_prob = torch::sigmoid(actor.forward(state));
-        torch::Tensor actor_prob = torch::sigmoid(discriminator.forward(
-                torch::cat({state, actor_action_prob.detach()}, state.dim() - 1)));
-        torch::Tensor actor_label = torch::zeros_like(actor_prob);
-        torch::Tensor actor_d_loss = torch::binary_cross_entropy(actor_prob, actor_label).mean();
-
-        torch::Tensor prob_diff = torch::relu(expert_prob - actor_prob).detach();
-
-        torch::Tensor total_d_loss = expert_d_loss + actor_d_loss;
-        total_d_loss.backward();
-
-        d_optim.step();
-
-
-        critic_optim.zero_grad();
-
-        torch::Tensor actor_actual_action_prob = torch::softmax(actor.forward(actual_state_), 1);
-
-        torch::Tensor actor_prob2 = torch::sigmoid(discriminator.forward(
-                torch::cat({ actual_state_, actor_actual_action_prob * expert_actual_act_}, state.dim() - 1)));
-        torch::Tensor actor_label2 = torch::ones_like(actor_prob2);
-
-        torch::Tensor actor_d_loss2 = (torch::relu(torch::binary_cross_entropy(actor_prob2, actor_label2) - 0.1))*prob_diff.mean();
-
-        torch::Tensor values = critic.forward(actual_state_).squeeze();
-        torch::Tensor critic_loss = reward - values;
-        critic_loss = critic_loss * critic_loss;
-        critic_loss = critic_loss.mean();
-
-        torch::Tensor adv = reward - values.detach();
-
-        torch::Tensor actor_log_probs = torch::log(torch::sum(actor_actual_action_prob, 1));
-        torch::Tensor actor_loss = -actor_log_probs * adv;
-        actor_loss = actor_loss.mean();
-        */
+        torch::Tensor lasthit_reward = p_data.at(dotautil::reward_lasthit_key).to(dev);
 
         actor_optim.zero_grad();
         torch::Tensor actor_actual_action_ = sigmoid(actor.forward(actual_state_));
+
+        torch::Tensor state_act = torch::cat({actual_state_, actor_actual_action_.detach()}, state.dim() - 1);
+        //if (!p_data.count("expert_mode")) {
+            avg_critic_loss += critic_training_fn(critic, state_act, lasthit_reward, critic_optim);
+        //}
+
         //torch::Tensor total_loss = actor_d_loss2;//TODO FIX actor critic loss + actor_loss + critic_loss;
         torch::Tensor total_loss = actor_actual_action_ - expert_actual_act_;
         total_loss = total_loss * total_loss;
         total_loss = total_loss.mean();
+        total_loss = critic.forward(torch::cat({actual_state_, actor_actual_action_}, state.dim() - 1)).squeeze().mean();
         avg_total_loss += total_loss;
         total_loss.backward();
 
         //critic_optim.step();
+
         actor_optim.step();
     }
 
