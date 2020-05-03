@@ -9,9 +9,10 @@
 
 NS_DOTACLIENT_BEGIN
 
-DotaEnv::DotaEnv(const std::string &host, short port, HostMode mode, int max_game_time, bool expert_action)
+DotaEnv::DotaEnv(const std::string &host, short port, HostMode mode, int max_game_time,
+        const std::string& win_prob_model_path, bool expert_action)
     :host(host), port(port), host_mode(mode), max_game_time(max_game_time), expert_action(expert_action), valid(false), tick(0),
-    radiant_player_id(0), dire_player_id(0), game_status(OK)
+    radiant_player_id(0), dire_player_id(0), pred_reward(win_prob_model_path), game_status(OK)
 {
     auto channel = grpc::CreateChannel(host + ":" + std::to_string(port),
             grpc::InsecureChannelCredentials());
@@ -122,6 +123,8 @@ void DotaEnv::reset() {
 
     reset_action(TEAM_RADIANT);
     reset_action(TEAM_DIRE);
+
+    pred_reward.reset(ObserverState(*radiant_state, *dire_state));
 }
 
 void DotaEnv::step() {
@@ -149,13 +152,15 @@ void DotaEnv::step() {
         *dire_state = ob.world_state();
     }
 
+    float rad_win_prob = pred_reward.forward(ObserverState(*radiant_state, *dire_state));
+
     reset_player_id(TEAM_RADIANT);
     reset_player_id(TEAM_DIRE);
 
     if (dotautil::has_hero(*get_state(TEAM_RADIANT),
             DOTA_TEAM_RADIANT, radiant_player_id)) {
         auto rad_action = radiant_net->forward(*get_state(TEAM_RADIANT),
-                                               DOTA_TEAM_RADIANT, radiant_player_id, tick, expert_action);
+                                               DOTA_TEAM_RADIANT, radiant_player_id, tick, rad_win_prob, expert_action);
         rad_action.set_player(radiant_player_id);
         radiant_action->mutable_actions()->mutable_actions()->Add(std::move(rad_action));
         rad_open_ai_net->set_player_id(radiant_player_id);
@@ -175,7 +180,7 @@ void DotaEnv::step() {
     if (dotautil::has_hero(*get_state(TEAM_DIRE),
             DOTA_TEAM_DIRE, dire_player_id)) {
         auto d_action = dire_net->forward(*get_state(TEAM_DIRE),
-                                          DOTA_TEAM_DIRE, dire_player_id, tick, expert_action);
+                                          DOTA_TEAM_DIRE, dire_player_id, tick, rad_win_prob, expert_action);
         d_action.set_player(dire_player_id);
         dire_action->mutable_actions()->mutable_actions()->Add(std::move(d_action));
         dire_open_ai_net->set_player_id(dire_player_id);
@@ -208,6 +213,7 @@ void DotaEnv::step() {
     ++tick;
 
     if (tick > max_game_time) {
+        std::cerr << "game end win prob " << rad_win_prob << " is expert " << expert_action << std::endl;
         game_status = OUT_OF_RANGE;
     }
 }

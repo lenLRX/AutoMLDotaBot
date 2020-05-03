@@ -74,9 +74,8 @@ public:
                                                  enemy_creep_state}, -1);
         torch::Tensor o = torch::relu(fc1->forward(input_tensor));
         o = o.reshape({1,1,-1});
-        torch::nn::RNNOutput rnn_out = lstm2->forward(o);
-        std::cerr << rnn_out.state.sizes() << std::endl;
-        return rnn_out.output;
+        auto rnn_out = std::get<0>(lstm2->forward(o));
+        return rnn_out;
     }
 
     void reset() override {

@@ -41,6 +41,15 @@ NS_UTIL_BEGIN
 
 typedef std::vector<CMsgBotWorldState_Unit> Units;
 
+class ObserverState {
+public:
+    ObserverState(const CMsgBotWorldState& rad_state,
+                  const CMsgBotWorldState& dire_state);
+    Units units_;
+    std::unordered_set<int> rad_visible_;
+    std::unordered_set<int> dire_visibe_;
+};
+
 
 CMsgBotWorldState_Unit get_hero(const CMsgBotWorldState& state, DOTA_TEAM team, int player_id);
 

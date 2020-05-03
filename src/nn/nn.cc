@@ -11,7 +11,7 @@
 NS_NN_BEGIN
 
 Net::Net()
-        :prev_last_hit(0), prev_health(0) {
+        :prev_last_hit(0), prev_health(0), prev_win_prob(0.5f) {
     auto root_ptr = new HighLevelDecision();
     root.reset(root_ptr);
     //TODO auto rename
@@ -50,13 +50,22 @@ Net::Net()
         prev_last_hit = lasthit;
         return last_hit_inc;
     };
+
+    auto win_prob_reward = [this](const LayerForwardConfig& cfg)->float  {
+        float win_prob = cfg.rad_win_prob;
+        if (cfg.team_id == DOTA_TEAM_DIRE) {
+            win_prob = 1 - win_prob;
+        }
+
+    };
+
     reward_fn_map[dotautil::reward_hp_key] = health_reward;
     reward_fn_map[dotautil::reward_lasthit_key] = lasthit_reward;
 }
 
 CMsgBotWorldState_Action Net::forward(const CMsgBotWorldState& state,
-        DOTA_TEAM team_id, int player_id, int tick, bool expert_action) {
-    LayerForwardConfig cfg(state, team_id, player_id, tick, expert_action);
+        DOTA_TEAM team_id, int player_id, int tick, float rad_win_prob, bool expert_action) {
+    LayerForwardConfig cfg(state, team_id, player_id, tick, rad_win_prob, expert_action);
 
     auto last_layer = root->forward(cfg);
 

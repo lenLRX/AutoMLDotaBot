@@ -23,14 +23,16 @@ public:
         DOTA_TEAM team_id,
         uint32_t player_id,
         int tick,
+        float rad_win_prob,
         bool expert_action=false)
         :state(state), team_id(team_id), player_id(player_id),
-        tick(tick), expert_action(expert_action)
+        tick(tick), rad_win_prob(rad_win_prob), expert_action(expert_action)
         {}
     CMsgBotWorldState state;
     DOTA_TEAM team_id;
     uint32_t player_id;
     int tick;
+    float rad_win_prob;
     bool expert_action;
 };
 

@@ -46,7 +46,7 @@ public:
     Net();
 
     CMsgBotWorldState_Action forward(const CMsgBotWorldState& state,
-            DOTA_TEAM team_id, int player_id, int tick, bool expert_action);
+            DOTA_TEAM team_id, int player_id, int tick, float rad_win_prob, bool expert_action);
 
     void collect_training_data();
 
@@ -61,10 +61,12 @@ public:
     void train(const std::vector<ReplayBuffer>& replays);
 
     void reset();
+    void reset(float win_prob);
 
 private:
     uint32_t prev_last_hit;
     uint32_t prev_health;
+    float prev_win_prob;
     std::unordered_map<std::string, RewardRecord> reward_map;
     std::unordered_map<std::string, std::function<float(const LayerForwardConfig&)>> reward_fn_map;
     ReplayBuffer replay_buffer;

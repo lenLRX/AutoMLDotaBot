@@ -109,8 +109,8 @@ public:
     }
 
     torch::Tensor forward(const torch::Tensor& state) {
-        torch::nn::RNNOutput o = lstm->forward(state);
-        return fc1->forward(o.output);
+        auto o = lstm->forward(state);
+        return fc1->forward(std::get<0>(o));
     }
 
     void reset() override {
@@ -171,9 +171,9 @@ public:
         }
 
         torch::Tensor forward(const torch::Tensor& lstm_input, const torch::Tensor& dense_input) {
-            torch::nn::RNNOutput lstm_o = lstm->forward(lstm_input);
+            auto lstm_o = std::get<0>(lstm->forward(lstm_input));
             torch::Tensor dense_o = fc_state->forward(dense_input);
-            torch::Tensor hidden = torch::cat({lstm_o.output[0], dense_o},-1);
+            torch::Tensor hidden = torch::cat({lstm_o[0], dense_o},-1);
             return fc1->forward(hidden);
         }
 

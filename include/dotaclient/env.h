@@ -7,6 +7,7 @@
 
 #include "util/util.h"
 #include "nn/nn.h"
+#include "nn/solo_pred_reward.h"
 
 #include <string>
 
@@ -18,8 +19,8 @@ NS_DOTACLIENT_BEGIN
 
 class DotaEnv {
 public:
-    DotaEnv(const std::string& host, short port,
-            HostMode mode, int max_game_time, bool expert_action = false);
+    DotaEnv(const std::string& host, short port, HostMode mode, int max_game_time,
+            const std::string& win_prob_model_path, bool expert_action = false);
 
     bool game_running();
 
@@ -70,6 +71,8 @@ private:
 
     Network::Ptr rad_open_ai_net;
     Network::Ptr dire_open_ai_net;
+
+    nn::SoloPredReward pred_reward;
 
     Status game_status;
 };

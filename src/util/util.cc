@@ -448,4 +448,26 @@ void StateManager::update_reward(const CMsgBotWorldState& state) {
     float dist_reward = (prev_dis_to_mid - current_dis_to_mid) * 1E-3f;
 }
 
+ObserverState::ObserverState(const CMsgBotWorldState& rad_state,
+                             const CMsgBotWorldState& dire_state) {
+    std::unordered_set<int> visited;
+    for (auto& unit : rad_state.units()) {
+        int handle = unit.handle();
+        if (!visited.count(handle)) {
+            visited.insert(handle);
+            units_.push_back(unit);
+        }
+        rad_visible_.insert(handle);
+    }
+
+    for (auto& unit : dire_state.units()) {
+        int handle = unit.handle();
+        if (!visited.count(handle)) {
+            visited.insert(handle);
+            units_.push_back(unit);
+        }
+        dire_visibe_.insert(handle);
+    }
+}
+
 NS_UTIL_END
