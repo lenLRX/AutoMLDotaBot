@@ -7,7 +7,14 @@
 
 #include "dotaclient/env.h"
 
+#include "dotaclient/expert_item_build.h"
+
 NS_DOTACLIENT_BEGIN
+
+constexpr int ignore_tag = 0;
+constexpr int rad_tag = 1;
+constexpr int dire_tag = 2;
+
 
 DotaEnv::DotaEnv(const std::string &host, short port, HostMode mode, int max_game_time,
         const std::string& win_prob_model_path, bool expert_action)
@@ -49,9 +56,8 @@ std::shared_ptr<Actions> DotaEnv::get_action(Team team) {
 }
 
 void DotaEnv::reset() {
-    std::cerr << std::this_thread::get_id() << "env::reset" << std::endl;
-    radiant_net->reset();
-    dire_net->reset();
+    std::cerr << std::this_thread::get_id() << " env::reset" << std::endl;
+
     tick = 0;
     game_status = OK;
     auto cfg = GameConfig();
@@ -72,8 +78,8 @@ void DotaEnv::reset() {
 
     cfg.set_host_mode(host_mode);
     cfg.set_game_mode(DOTA_GAMEMODE_1V1MID);
-    //cfg.set_ticks_per_observation(2);
-    cfg.set_ticks_per_observation(4);
+    //cfg.set_ticks_per_observation(4);
+    cfg.set_ticks_per_observation(2);
     cfg.set_host_timescale(10);
 
     grpc::ClientContext ctx;
@@ -124,47 +130,88 @@ void DotaEnv::reset() {
     reset_action(TEAM_RADIANT);
     reset_action(TEAM_DIRE);
 
-    pred_reward.reset(ObserverState(*radiant_state, *dire_state));
+    //float prob = pred_reward.reset(ObserverState(*radiant_state, *dire_state));
+    float prob = 0;
+    curr_dota_time = initialObservation.world_state_dire().dota_time();
+    radiant_net->reset(prob);
+    dire_net->reset(1 - prob);
 }
 
 void DotaEnv::step() {
+    std::shared_ptr<grpc::ClientAsyncResponseReader<Observation>> rad_ob_handle, dire_ob_handle;
+    PERF_TIMER();
+    Observation rad_ob;
+    Observation dire_ob;
+    grpc::Status rad_status;
+    grpc::Status dire_status;
     {
+        PERF_TIMER();
         grpc::ClientContext context;
         ObserveConfig ob_cfg;
         ob_cfg.set_team_id(TEAM_RADIANT);
-        Observation ob;
-        env_stub->observe(&context, ob_cfg, &ob);
 
-        *radiant_state = ob.world_state();
-        game_status = ob.status();
-        if (game_status != 0) {
-            std::cerr << std::this_thread::get_id() << " Status " << game_status << std::endl;
-            //throw std::exception();
-        }
+        // TODO Async
+        //env_stub->observe(&context, ob_cfg, &ob);
+        rad_ob_handle = env_stub->Asyncobserve(&context, ob_cfg, &cq);
+        rad_ob_handle->Finish(&rad_ob, &rad_status, (void*)rad_tag);
     }
 
     {
         grpc::ClientContext context;
         ObserveConfig ob_cfg;
         ob_cfg.set_team_id(TEAM_DIRE);
-        Observation ob;
-        env_stub->observe(&context, ob_cfg, &ob);
-        *dire_state = ob.world_state();
+        dire_ob_handle = env_stub->Asyncobserve(&context, ob_cfg, &cq);
+        dire_ob_handle->Finish(&dire_ob, &dire_status, (void*)dire_tag);
     }
 
-    float rad_win_prob = pred_reward.forward(ObserverState(*radiant_state, *dire_state));
+    bool rad_ready = false;
+    bool dire_ready = false;
+
+    while (!(rad_ready && dire_ready)) {
+        void* got_tag;
+        bool ok = false;
+        cq.Next(&got_tag, &ok);
+        if (got_tag == (void*)rad_tag) {
+            rad_ready = true;
+        }
+        if (got_tag == (void*)dire_tag) {
+            dire_ready = true;
+        }
+    }
+
+    *radiant_state = rad_ob.world_state();
+    game_status = rad_ob.status();
+    if (game_status != 0) {
+        std::cerr << std::this_thread::get_id() << " Status " << game_status << std::endl;
+        //throw std::exception();
+    }
+    if (radiant_state->game_time() > 0) {
+        // most of tick dont have valid times ..
+        curr_dota_time = radiant_state->dota_time();
+    }
+
+    *dire_state = dire_ob.world_state();
+
+    //float rad_win_prob = pred_reward.forward(ObserverState(*radiant_state, *dire_state));
+    float rad_win_prob = 0;
 
     reset_player_id(TEAM_RADIANT);
     reset_player_id(TEAM_DIRE);
 
     if (dotautil::has_hero(*get_state(TEAM_RADIANT),
             DOTA_TEAM_RADIANT, radiant_player_id)) {
-        auto rad_action = radiant_net->forward(*get_state(TEAM_RADIANT),
-                                               DOTA_TEAM_RADIANT, radiant_player_id, tick, rad_win_prob, expert_action);
+        PERF_TIMER();
+        CMsgBotWorldState_Action rad_action;
+        rad_action = radiant_net->forward(*get_state(TEAM_RADIANT),
+                                          DOTA_TEAM_RADIANT, radiant_player_id, tick, rad_win_prob, expert_action);
+        // dotaservice didn't impl purchase item yet
+        if (tick % 20 == 0) {
+            //get_expert_item_build(rad_action, *get_state(TEAM_RADIANT), DOTA_TEAM_RADIANT, radiant_player_id);
+        }
         rad_action.set_player(radiant_player_id);
         radiant_action->mutable_actions()->mutable_actions()->Add(std::move(rad_action));
-        rad_open_ai_net->set_player_id(radiant_player_id);
-        rad_open_ai_net->forward(*get_state(TEAM_RADIANT));
+        //rad_open_ai_net->set_player_id(radiant_player_id);
+        //rad_open_ai_net->forward(*get_state(TEAM_RADIANT));
     }
     else {
         auto rad_noop = dotautil::no_op(radiant_player_id);
@@ -183,14 +230,16 @@ void DotaEnv::step() {
                                           DOTA_TEAM_DIRE, dire_player_id, tick, rad_win_prob, expert_action);
         d_action.set_player(dire_player_id);
         dire_action->mutable_actions()->mutable_actions()->Add(std::move(d_action));
-        dire_open_ai_net->set_player_id(dire_player_id);
-        dire_open_ai_net->forward(*get_state(TEAM_DIRE));
+        //dire_open_ai_net->set_player_id(dire_player_id);
+        //dire_open_ai_net->forward(*get_state(TEAM_DIRE));
     }
     else {
         auto dire_noop = dotautil::no_op(dire_player_id);
         dire_action->mutable_actions()->mutable_actions()->Add(std::move(dire_noop));
         dire_net->padding_reward();
     }
+
+    PERF_TIMER();
 
     for (auto player_id : dire_dummy_player) {
         auto dire_noop = dotautil::no_op(player_id);
@@ -213,11 +262,15 @@ void DotaEnv::step() {
     ++tick;
 
     if (tick > max_game_time) {
-        std::cerr << "game end win prob " << rad_win_prob << " is expert " << expert_action << std::endl;
         game_status = OUT_OF_RANGE;
     }
 }
 
+void DotaEnv::print_scoreboard() {
+    std::cerr << "game end dota time " << curr_dota_time << " is expert " << expert_action << std::endl;
+    radiant_net->print_scoreboard();
+    dire_net->print_scoreboard();
+}
 
 nn::ReplayBuffer DotaEnv::get_replay_buffer(Team team) {
     if (team == TEAM_RADIANT) {

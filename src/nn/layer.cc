@@ -36,7 +36,7 @@ void Layer::update_params(Layer& other) {
 }
 
 void Layer::reset() {
-    std::cerr << std::this_thread::get_id() << " Layer " << get_name() << " reset " << std::endl;
+    //std::cerr << std::this_thread::get_id() << " Layer " << get_name() << " reset " << std::endl;
     states.clear();
     ticks.clear();
     expert_mode = false;

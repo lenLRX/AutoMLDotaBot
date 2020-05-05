@@ -14,6 +14,8 @@
 #include "spdlog/spdlog.h"
 #include "nlohmann/json.hpp"
 
+#include "perf_timer.h"
+
 #define NS_DOTACLIENT_BEGIN namespace dotaservice {
 #define NS_DOTACLIENT_END }
 

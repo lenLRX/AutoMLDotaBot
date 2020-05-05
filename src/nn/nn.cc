@@ -56,7 +56,9 @@ Net::Net()
         if (cfg.team_id == DOTA_TEAM_DIRE) {
             win_prob = 1 - win_prob;
         }
-
+        float reward = win_prob - prev_win_prob;
+        prev_win_prob = win_prob;
+        return reward;
     };
 
     reward_fn_map[dotautil::reward_hp_key] = health_reward;
@@ -80,6 +82,13 @@ CMsgBotWorldState_Action Net::forward(const CMsgBotWorldState& state,
     }
 
     prev_health = hero.health();
+    if (cfg.team_id == DOTA_TEAM_RADIANT) {
+        prev_win_prob = cfg.rad_win_prob;
+    }
+    else {
+        prev_win_prob = 1 - cfg.rad_win_prob;
+    }
+
 
     return last_layer->get_action();
 }
@@ -167,16 +176,25 @@ void Net::train(const std::vector<ReplayBuffer>& replays) {
 }
 
 
-void Net::reset() {
+void Net::reset(float prob) {
+    last_hit_statistic = 0;
+    prev_win_prob = prob;
     for (auto& p : reward_map) {
         p.second.reset();
     }
     root->reset();
 }
 
+void Net::print_scoreboard() {
+    std::cerr << "score board: last hit " << prev_last_hit << std::endl;
+}
+
 void ReplayQueue::add_buffer(const ReplayBuffer& buffer){
     std::lock_guard<std::mutex> g(mtx);
     vec_buffer.push_back(buffer);
+    if (vec_buffer.size() > capacity) {
+        vec_buffer.pop_front();
+    }
 }
 
 
@@ -185,19 +203,20 @@ void ReplayQueue::get_last_buffer(std::vector<ReplayBuffer>& ret, int num) {
     std::lock_guard<std::mutex> g(mtx);
     int current_rep_num = vec_buffer.size();
     if (current_rep_num < num) {
-        ret = vec_buffer;
+        ret = {vec_buffer.begin(), vec_buffer.end()};
     }
     else {
         int diff = current_rep_num - num;
         vec_buffer.erase(vec_buffer.begin(), vec_buffer.begin() + diff);
-        ret = vec_buffer;
+        ret = {vec_buffer.begin(), vec_buffer.end()};
     }
 }
 
 void ReplayQueue::get_all_buffer(std::vector<ReplayBuffer>& ret) {
     ret.clear();
     std::lock_guard<std::mutex> g(mtx);
-    vec_buffer.swap(ret);
+    ret = {vec_buffer.begin(), vec_buffer.end()};
+    vec_buffer.clear();
 }
 
 NS_NN_END

@@ -50,7 +50,7 @@ void Network::forward(const CMsgBotWorldState &state) {
     torch::Tensor t_action_idx = torch::argmax(action_out).view({-1});
     int action_idx = t_action_idx.item().toInt();
 
-    std::cerr << "OPENAI: action_idx " << action_idx << std::endl;
+    //std::cerr << "OPENAI: action_idx " << action_idx << std::endl;
 
     if (action_idx == 0) {
         // move
@@ -58,8 +58,8 @@ void Network::forward(const CMsgBotWorldState &state) {
         int move_x = torch::argmax(move_x_layer_out).view({-1}).item().toInt();
         torch::Tensor move_y_layer_out = move_x_layer->forward(main_lstm);
         int move_y = torch::argmax(move_y_layer_out).view({-1}).item().toInt();
-        std::cerr << "OPENAI: move_x " << move_x
-            << " move_y " << move_y << std::endl;
+        //std::cerr << "OPENAI: move_x " << move_x
+         //   << " move_y " << move_y << std::endl;
     }
     else {
         // attack
@@ -68,8 +68,8 @@ void Network::forward(const CMsgBotWorldState &state) {
                 enemy_creep_dense_max);
         int unit_idx = torch::argmax(unit_selection_out).item().toInt();\
         auto handles = state_manager_->get_enemy_handle();
-        std::cerr << "selected unit_idx: " << unit_idx
-            << " handle: " << handles[unit_idx] << std::endl;
+        //std::cerr << "selected unit_idx: " << unit_idx
+        //    << " handle: " << handles[unit_idx] << std::endl;
     }
 
 }

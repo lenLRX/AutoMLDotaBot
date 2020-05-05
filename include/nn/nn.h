@@ -60,8 +60,9 @@ public:
 
     void train(const std::vector<ReplayBuffer>& replays);
 
-    void reset();
     void reset(float win_prob);
+
+    void print_scoreboard();
 
 private:
     uint32_t prev_last_hit;
@@ -69,17 +70,20 @@ private:
     float prev_win_prob;
     std::unordered_map<std::string, RewardRecord> reward_map;
     std::unordered_map<std::string, std::function<float(const LayerForwardConfig&)>> reward_fn_map;
+    int last_hit_statistic;
     ReplayBuffer replay_buffer;
     Layer::Ptr root;
 };
 
 class ReplayQueue {
 public:
+    ReplayQueue(int capacity): capacity(capacity) {}
     void add_buffer(const ReplayBuffer& buffer);
     void get_last_buffer(std::vector<ReplayBuffer>& ret, int num);
     void get_all_buffer(std::vector<ReplayBuffer>& ret);
 private:
-    std::vector<ReplayBuffer> vec_buffer;
+    std::deque<ReplayBuffer> vec_buffer;
+    int capacity;
     std::mutex mtx;
 };
 

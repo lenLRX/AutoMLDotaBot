@@ -11,19 +11,20 @@ NS_NN_BEGIN
 
 static const int hero_dim = 25;
 static const int creep_dim = 21;
-static const int creep_batch_dim = 20;
+static const int creep_batch_dim = 50;
 static const float cell_size = 128;
 
 SoloPredReward::SoloPredReward(const std::string &model_path) {
     model_ = torch::jit::load(model_path);
 }
 
-void SoloPredReward::reset(const dotautil::ObserverState &cfg) {
+float SoloPredReward::reset(const dotautil::ObserverState &cfg) {
     const int lstm_hidden_size = 512;
     auto h_0 = torch::zeros({1,1, lstm_hidden_size});
     auto c_0 = torch::zeros({1,1, lstm_hidden_size});
     lstm_states_ = torch::ivalue::Tuple::create({h_0, c_0});
     last_prob_ = forward(cfg);
+    return last_prob_;
 }
 
 float SoloPredReward::get_reward(const dotautil::ObserverState &cfg) {
@@ -90,9 +91,9 @@ torch::Tensor SoloPredReward::make_hero_value(const CMsgBotWorldState_Unit& unit
     float cell_x = x / cell_size;
     float cell_y = y / cell_size;
     float cell_z = z / cell_size;
-    float vec_x = fmod(x, cell_x);
-    float vec_y = fmod(y, cell_y);
-    float vec_z = fmod(z, cell_z);
+    float vec_x = fmod(x, cell_size);
+    float vec_y = fmod(y, cell_size);
+    float vec_z = fmod(z, cell_size);
     float life_state = !unit.is_alive();
     float damage_max = unit.base_damage() + unit.base_damage_variance() / 2;
     float damage_min = unit.base_damage() - unit.base_damage_variance() / 2;
@@ -151,9 +152,9 @@ torch::Tensor SoloPredReward::make_creep_value(const CMsgBotWorldState_Unit& uni
     float cell_x = x / cell_size;
     float cell_y = y / cell_size;
     float cell_z = z / cell_size;
-    float vec_x = fmod(x, cell_x);
-    float vec_y = fmod(y, cell_y);
-    float vec_z = fmod(z, cell_z);
+    float vec_x = fmod(x, cell_size);
+    float vec_y = fmod(y, cell_size);
+    float vec_z = fmod(z, cell_size);
     float life_state = !unit.is_alive();
     float damage_max = unit.base_damage() + unit.base_damage_variance() / 2;
     float damage_min = unit.base_damage() - unit.base_damage_variance() / 2;
@@ -227,6 +228,9 @@ float SoloPredReward::forward(const dotautil::ObserverState &cfg) {
     lstm_states_ = tup->elements()[1];
     float win_prob = output.toTensor().view({-1}).item().toFloat();
     if (std::isnan(win_prob)) {
+        for (auto& iv: state) {
+            std::cerr << iv << std::endl;
+        }
         throw std::runtime_error("found nan win prob");
     }
 

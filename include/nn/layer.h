@@ -7,6 +7,7 @@
 
 #include "util/util.h"
 #include "torch_layer.h"
+#include "spdlog/spdlog.h"
 
 NS_NN_BEGIN
 
@@ -38,7 +39,9 @@ public:
 
 class Layer: public std::enable_shared_from_this<Layer> {
 public:
-
+    Layer() {
+        action_logger = spdlog::get("action_logger");
+    }
     virtual ~Layer() {}
 
     using PackedData = std::map<std::string, torch::Tensor>;
@@ -85,6 +88,7 @@ public:
     std::vector<torch::Tensor> states;
     std::vector<int> ticks;
     bool expert_mode{false};
+    std::shared_ptr<spdlog::logger> action_logger;
     std::mutex mtx;
 };
 

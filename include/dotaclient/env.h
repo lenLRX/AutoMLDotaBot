@@ -31,6 +31,8 @@ public:
 
     void step();
 
+    void print_scoreboard();
+
     nn::ReplayBuffer get_replay_buffer(Team team);
 
     void update_param(Team team, const nn::Net& net);
@@ -74,7 +76,9 @@ private:
 
     nn::SoloPredReward pred_reward;
 
+    float curr_dota_time;
     Status game_status;
+    grpc::CompletionQueue cq;
 };
 
 NS_DOTACLIENT_END

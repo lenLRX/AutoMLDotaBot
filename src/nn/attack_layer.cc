@@ -30,7 +30,7 @@ static torch::Tensor creep_encoding(const CMsgBotWorldState_Unit& h,
 
 
 #define SAVE_EXPERT_ACTION() for (const auto& creep:enemy_creeps) { \
-        if (creep.health() < hero_atk * 1.5) {\
+        if (creep.health() < hero_atk * 1.1) {\
             selected = i;\
             expert_action_cache.push_back(1);\
         }\
@@ -105,7 +105,7 @@ std::shared_ptr<Layer> AttackLayer::forward_expert(const LayerForwardConfig &cfg
     const CMsgBotWorldState_Unit& hero = dotautil::get_hero(cfg.state,
                                                             cfg.team_id, cfg.player_id);
 
-    auto nearby_units = dotautil::get_nearby_unit(cfg.state, hero, 2000);
+    auto nearby_units = dotautil::get_nearby_unit(cfg.state, hero, 1000);
 
     uint32_t opposed_team = dotautil::get_opposed_team(hero.team_id());
 
@@ -127,6 +127,12 @@ std::shared_ptr<Layer> AttackLayer::forward_expert(const LayerForwardConfig &cfg
     if (selected < 0) {
         selected = 0;
     }
+
+    std::stringstream ss;
+
+    ss << "expert select distance " << dotautil::get_unit_distance(hero, enemy_creeps[selected]);
+    action_logger->info(ss.str().c_str());
+    //std::cerr << "expert selected " << enemy_creeps[selected].DebugString() << std::endl;
 
     atk_handle = enemy_creeps[selected].handle();
 

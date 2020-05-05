@@ -15,7 +15,7 @@ class SoloPredReward {
 public:
     explicit SoloPredReward(const std::string& model_path);
 
-    void reset(const dotautil::ObserverState &cfg);
+    float reset(const dotautil::ObserverState &cfg);
 
     float get_reward(const dotautil::ObserverState &cfg);
     float forward(const dotautil::ObserverState &cfg);

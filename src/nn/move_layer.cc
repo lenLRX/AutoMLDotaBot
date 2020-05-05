@@ -31,7 +31,7 @@ static std::pair<float, float> get_move_vec(torch::Tensor x) {
     return out_;
 }
 
-static float atk_range = 450.0f;
+static float atk_range = 300.0f;// get closer
 static float map_bound = 8000.0f;
 
 #define SAVE_EXPERT_ACTION()  if (enemy_creeps.empty() || dotautil::filter_units_by_type(enemy_creeps, CMsgBotWorldState_UnitType_LANE_CREEP).empty()) {\
@@ -178,7 +178,21 @@ std::shared_ptr<Layer> MoveLayer::forward_expert(const LayerForwardConfig &cfg) 
     std::pair<float, float> tmp_target_pos;
     SAVE_EXPERT_ACTION();
 
+    if (!enemy_creeps.empty()) {
+        auto target_unit = dotautil::get_nearest_unit(enemy_creeps, hero);
+        float distance = dotautil::get_unit_distance(target_unit, hero);
+        std::stringstream ss;
+        ss << "expert move dist "<< distance << " hero location x "
+           << location.x() << ", " << location.y() << " creep location: "
+           << target_unit.location().x() << ", " << target_unit.location().y()
+           << " expert move target " << tmp_target_pos.first << ", "
+           << tmp_target_pos.second << " target type " << target_unit.unit_type();
+        //CMsgBotWorldState_UnitType_LANE_CREEP
+        action_logger->info(ss.str().c_str());
+    }
+
     target_pos = tmp_target_pos;
+    //std::cerr << "expert target pos " << target_pos.first << "," << target_pos.second << std::endl;
     dist = sqrtf(target_pos.first * target_pos.first + target_pos.second * target_pos.second);
     z = hero.location().z();
 

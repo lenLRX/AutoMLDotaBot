@@ -23,14 +23,15 @@ HighLevelDecision::HighLevelDecision() {
                                 expert_idx = 2;\
                                 break;\
                             }\
-                            for (const auto& creep:nearby_enemy) {\
-                                if (creep.health() < hero_atk * 1.5) {\
+                            for (const auto& creep:nearby_attackable_enemy) {\
+                                if (creep.health() < hero_atk * 1.1) {\
                                     expert_idx = 1;\
                                 }\
                             }\
                             } while(0);\
 
 std::shared_ptr<Layer> HighLevelDecision::forward_impl(const LayerForwardConfig &cfg) {
+    //std::cerr << "using expert high level" << std::endl;
     CMsgBotWorldState_Unit hero = dotautil::get_hero(cfg.state, cfg.team_id, cfg.player_id);
 
     torch::Tensor x = dotautil::state_encoding(cfg.state, cfg.team_id, cfg.player_id);
@@ -48,6 +49,9 @@ std::shared_ptr<Layer> HighLevelDecision::forward_impl(const LayerForwardConfig 
     uint32_t opposed_team = dotautil::get_opposed_team(hero.team_id());
 
     dotautil::Units nearby_enemy = dotautil::filter_units_by_team(nearby_units, opposed_team);
+    dotautil::Units nearby_attackable_enemy = dotautil::filter_units_by_team(dotautil::get_nearby_unit(cfg.state, hero, 450), opposed_team);
+    nearby_attackable_enemy = dotautil::filter_attackable_units(nearby_attackable_enemy);
+    //std::cerr << "highlevel near creep size " << nearby_attackable_enemy.size() << std::endl;
     nearby_enemy = dotautil::filter_attackable_units(nearby_enemy);
     if (nearby_enemy.empty()) {
         idx = 0;
@@ -82,6 +86,9 @@ std::shared_ptr<Layer> HighLevelDecision::forward_expert(const LayerForwardConfi
 
     dotautil::Units nearby_enemy = dotautil::filter_units_by_team(nearby_units, opposed_team);
     nearby_enemy = dotautil::filter_attackable_units(nearby_enemy);
+    dotautil::Units nearby_attackable_enemy = dotautil::filter_units_by_team(dotautil::get_nearby_unit(cfg.state, hero, 600), opposed_team);
+    nearby_attackable_enemy = dotautil::filter_attackable_units(nearby_attackable_enemy);
+    //std::cerr << "expert highlevel near creep size " << nearby_attackable_enemy.size() << std::endl;
     SAVE_EXPERT_ACTION();
 
     torch::Tensor expert = torch::zeros({output_shape});
@@ -92,12 +99,18 @@ std::shared_ptr<Layer> HighLevelDecision::forward_expert(const LayerForwardConfi
     act[expert_idx] = 1;
     one_hot_action.push_back(act);
 
+    std::stringstream ss;
+    ss << "expert highlevel selection " << expert_idx;
+    action_logger->info(ss.str().c_str());
+
+
     auto ret_layer = children.at(expert_idx);
     ret_layer->forward(cfg);
     return ret_layer;
 }
 
 std::shared_ptr<Layer> HighLevelDecision::forward(const LayerForwardConfig &cfg) {
+    PERF_TIMER();
     ticks.push_back(cfg.tick);
     save_state(cfg);
     if (cfg.expert_action) {
